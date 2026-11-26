@@ -1,4 +1,5 @@
 from lxml import html
+from typing_extensions import override
 
 from juriscraper.lib.string_utils import convert_date_string
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
@@ -12,7 +13,8 @@ class Site(OpinionSiteLinear):
         )
         self.court_id = self.__module__
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         for item in self.html.xpath(".//item"):
             for e in item.xpath(
                 ".//description/text()",
@@ -25,6 +27,15 @@ class Site(OpinionSiteLinear):
                 docket = e.split()[1].strip()
             date = convert_date_string(item.xpath(".//pubdate/text()")[0])
             formatted_date = date.strftime("%Y-%m-%d")
+
+            lower_court = (
+                item.xpath(
+                    ".//*[local-name()='dc:creator' or local-name()='creator']/text()"
+                )[0]
+                .split("-")[0]
+                .strip()
+            )
+
             self.cases.append(
                 {
                     "url": html.tostring(item.xpath("link")[0], method="text")
@@ -35,5 +46,6 @@ class Site(OpinionSiteLinear):
                     "date": formatted_date,
                     "status": status,
                     "docket": docket,
+                    "lower_court": lower_court,
                 }
             )

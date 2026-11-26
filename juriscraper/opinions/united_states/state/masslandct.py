@@ -14,7 +14,7 @@ Notes:
 import datetime
 
 from juriscraper.lib.string_utils import convert_date_string, titlecase
-from juriscraper.OpinionSiteLinear import OpinionSite
+from juriscraper.OpinionSite import OpinionSite
 
 
 class Site(OpinionSite):
@@ -24,6 +24,7 @@ class Site(OpinionSite):
         self.court_id = self.__module__
         self.year = None
         self.expected_content_types = ["text/html"]
+        self.should_have_results = True
 
     def _get_download_urls(self) -> list[str]:
         links = self.html.xpath(

@@ -9,6 +9,8 @@ History:
 import urllib.parse
 from datetime import date, datetime, timedelta
 
+from typing_extensions import override
+
 from juriscraper.lib.string_utils import convert_date_string
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
@@ -23,8 +25,10 @@ class Site(OpinionSiteLinear):
         self.status = "Published"
         today = date.today()
         self.previous_date = today - timedelta(days=60)
+        self.should_have_results = True
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         if self.test_mode_enabled():
             self.previous_date = datetime(2023, 9, 21).date()
 

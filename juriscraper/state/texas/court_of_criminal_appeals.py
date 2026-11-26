@@ -1,0 +1,110 @@
+from functools import cached_property
+from typing import Literal, Never
+
+from typing_extensions import override
+
+from juriscraper.state.texas.common import (
+    CourtID,
+    CourtType,
+    TexasAppealsCourt,
+    TexasCommonData,
+    TexasCommonScraper,
+    _parse_appeals_court,
+)
+
+
+class TexasCourtOfCriminalAppealsDocket(TexasCommonData):
+    """
+    Extension of the `TexasCommonData` schema with data specific to Texas Court
+    of Criminal Appeals dockets.
+
+    :ivar appeals_court: Information about the appeals court which heard this
+    case.
+    """
+
+    court_id: Literal[CourtID.COURT_OF_CRIMINAL_APPEALS]
+    court_type: Literal[CourtType.SUPREME]
+
+    appeals_court: TexasAppealsCourt
+
+
+class TexasCourtOfCriminalAppealsScraper(
+    TexasCommonScraper[TexasCourtOfCriminalAppealsDocket]
+):
+    """
+    Extends the `TexasCommonScraper` class to extract data specific to Texas
+    Court of Criminal Appeals dockets. Unique data extracted is:
+
+    - Appeals court information.
+    """
+
+    def __init__(
+        self, court_id: str = CourtID.COURT_OF_CRIMINAL_APPEALS.value
+    ):
+        super().__init__(court_id)
+
+    @override
+    @property
+    def data(
+        self,
+    ) -> TexasCourtOfCriminalAppealsDocket | dict[Never, Never]:
+        """
+        Extract parsed data from an HTML tree. This property returns a
+        `TexasCourtOfCriminalAppealsDocket`.
+
+        :return: Parsed data.
+        """
+
+        common_data = self._common_data
+        if common_data is None:
+            return {}
+        if self.tree is None:
+            raise ValueError("_parse_text() must called first.")
+
+        return TexasCourtOfCriminalAppealsDocket(
+            court_id=CourtID.COURT_OF_CRIMINAL_APPEALS,
+            court_type=CourtType.SUPREME,
+            appeals_court=_parse_appeals_court(self.tree),
+            case_events=common_data["case_events"],
+            appellate_briefs=common_data["appellate_briefs"],
+            docket_number=common_data["docket_number"],
+            date_filed=common_data["date_filed"],
+            case_type=common_data["case_type"],
+            parties=common_data["parties"],
+            originating_court=common_data["originating_court"],
+            case_name=common_data["case_name"],
+            case_name_full=common_data["case_name_full"],
+        )
+
+    @override
+    @cached_property
+    def case_name(self) -> str:
+        """
+        Special version of case name processing, which handles instances where
+        the state is not listed as a party, which we assume to be a clerical
+        error. Also eliminates most of the default logic for shortening case
+        names as the defendant party's name is typically a person's name, which
+        doesn't need to be shortened.
+
+        :return: Shortened case name
+        """
+
+        # If there is only one party, and it is not the state, assume there was
+        # a clerical error
+        if (
+            len(self.parties) == 1
+            and self.parties[0]["type"].lower().find("state") < 0
+        ):
+            return f"{self.parties[0]['name']} v. The State of Texas"
+        if len(self.parties) == 2:
+            if self.parties[0]["type"].lower().find("state") >= 0:
+                defendant = self.parties[1]
+            elif self.parties[1]["type"].lower().find("state") >= 0:
+                defendant = self.parties[0]
+            else:
+                defendant = None
+
+            if defendant is not None:
+                return f"{defendant['name']} v. The State of Texas"
+        # Fall back on the full case name property
+        return self.case_name_full

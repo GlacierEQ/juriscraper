@@ -7,29 +7,46 @@ History:
  2015-10-23: Parts rewritten by mlr.
  2016-05-04: Updated by arderyp to handle typos in docket string format
  2024-09-05: Updated by flooie to deal with block from main website
+ 2025-10-27: Updated by quevon24 to fix content cleanup
+ 2026-07-29: Updated by grossir to strip site chrome from the new LRB template
 """
 
 import re
 from datetime import date, timedelta
-from typing import Any, Optional
+from urllib.parse import urljoin
 
 import nh3
+from lxml.html import fromstring, tostring
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.auth_utils import set_api_token_header
 from juriscraper.lib.judge_parsers import normalize_judge_string
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
 class Site(OpinionSiteLinear):
     first_opinion_date = date(2003, 9, 25)
     days_interval = 30
+    court_id_map = {
+        "Court of Appeals": "1",
+        "App Div, 1st Dept": "3",
+        "App Div, 2d Dept": "4",
+        "App Div, 3d Dept": "5",
+        "App Div, 4th Dept": "6",
+        "Appellate Term, 1st Dept": "7",
+        "Appellate Term, 2d Dept": "8",
+    }
+
+    base_url = "https://iapps.courts.state.ny.us/lawReporting/Search"
+    court = "Court of Appeals"
+    empty_result_messages = {"No results found."}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.court = "Court of Appeals"
         self.court_id = self.__module__
-        self.url = "https://iapps.courts.state.ny.us/lawReporting/Search?searchType=opinion"
+        self.url = self.base_url
         self._set_parameters()
         self.expected_content_types = ["application/pdf", "text/html"]
         self.make_backscrape_iterable(kwargs)
@@ -37,8 +54,8 @@ class Site(OpinionSiteLinear):
 
     def _set_parameters(
         self,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> None:
         """Set the parameters for the POST request.
 
@@ -57,46 +74,103 @@ class Site(OpinionSiteLinear):
             start_date = end_date - timedelta(days=30)
 
         self.parameters = {
-            "rbOpinionMotion": "opinion",
-            "Pty": "",
-            "and_or": "and",
-            "dtStartDate": start_date.strftime("%m/%d/%Y"),
-            "dtEndDate": end_date.strftime("%m/%d/%Y"),
-            "court": self.court,
-            "docket": "",
-            "judge": "",
-            "slipYear": "",
-            "slipNo": "",
-            "OffVol": "",
-            "Rptr": "",
-            "OffPage": "",
-            "fullText": "",
-            "and_or2": "and",
-            "Order_By": "Party Name",
-            "Submit": "Find",
-            "hidden1": "",
-            "hidden2": "",
+            "eSearchType": "0",
+            "strPartyNames": "",
+            "ePartyNameType": "0",
+            "oStartDate": start_date.strftime("%m/%d/%Y"),
+            "oEndDate": end_date.strftime("%m/%d/%Y"),
+            "oCourt": self.court_id_map[self.court],
+            "strDocketNumber": "",
+            "wmcJudge:strJudge": "",
+            "strSlipYear": "",
+            "strSlipNumber": "",
+            "wmcCitation:strVolume": "",
+            "wmcCitation:eReporter": "",
+            "wmcCitation:strPage": "",
+            "strFullText": "",
+            "eFullTextType": "0",
+            "btnSubmit": "",
         }
 
-    def _process_html(self):
-        for row in self.html.xpath(".//table")[-1].xpath(".//tr")[1:]:
-            slip_cite = " ".join(row.xpath("./td[5]//text()"))
-            official_citation = " ".join(row.xpath("./td[4]//text()"))
-            url = row.xpath(".//a")[0].get("href")
-            url = re.findall(r"(http.*htm)", url)[0]
+    async def _download(self, request_dict=None):
+        """Override to handle Wicket's session-based form submission.
+
+        Wicket requires a GET to the search page first to establish a
+        session and obtain the dynamic form action URL, then POST to it.
+        """
+        if self.test_mode_enabled():
+            return await super()._download(request_dict)
+
+        # Step 1: GET the search page to establish session
+        self.method = "GET"
+        html = await super()._download(request_dict)
+
+        # Step 2: Extract the form action URL
+        form_action = html.xpath("//form/@action")
+        if not form_action:
+            logger.warning("Could not find form action URL")
+            return html
+
+        action_url = urljoin(self.base_url, form_action[0])
+
+        # Step 3: POST to the form action URL
+        self.method = "POST"
+        self.url = action_url
+        return await super()._download(request_dict)
+
+    @override
+    def _process_html(self) -> None:
+        table = self.html.xpath('.//table[contains(@class, "table")]')
+        if not table:
+            logger.warning("No results table found.")
+            return
+
+        rows = table[0].xpath(".//tbody/tr")
+        # Empty-result responses render a single placeholder row whose only
+        # cell contains one of the strings below. Treat as normal empty
+        # result rather than logging an error per row. Wording is shared
+        # across all NY courts using this backend; extend the set if the
+        # site ever introduces a new variant.
+        if len(rows) == 1:
+            only_cells = rows[0].xpath("./td")
+            if len(only_cells) == 1:
+                placeholder = only_cells[0].text_content().strip()
+                if placeholder in self.empty_result_messages:
+                    logger.info("%s: no results in date range", self.court_id)
+                    return
+
+        for row in rows:
+            cells = row.xpath("./td")
+            if len(cells) < 9:
+                logger.error(
+                    "%s: expected 9 cells, got %s", self.court_id, len(cells)
+                )
+                continue
+
+            url = cells[6].xpath(".//a/@href")
+            if not url:
+                logger.error("%s: no url found for row", self.court_id)
+                continue
+
+            slip_cite = cells[6].xpath(
+                './/a/span[not(contains(@class, "visually-hidden"))]/text()'
+            )
+            slip_cite = slip_cite[0].strip() if slip_cite else ""
+            official_citation = cells[4].text_content().strip()
             status = "Unpublished" if "(U)" in slip_cite else "Published"
+            docket = cells[2].text_content().strip()
+            author = cells[7].text_content().strip()
             case = {
-                "name": row.xpath(".//td")[0].text_content(),
-                "date": row.xpath(".//td")[1].text_content(),
-                "url": url,
+                "name": cells[0].text_content().strip(),
+                "date": cells[1].text_content().strip(),
+                "url": url[0],
                 "status": status,
-                "docket": "",
+                "docket": docket,
                 "citation": official_citation,
                 "parallel_citation": slip_cite,
                 "author": "",
                 "per_curiam": False,
             }
-            author = row.xpath("./td")[-2].text_content()
 
             # Because P E R C U R I A M, PER CURIAM, and Per Curiam
             pc = re.sub(r"\s", "", author.lower())
@@ -109,7 +183,8 @@ class Site(OpinionSiteLinear):
                 case["author"] = cleaned_author
             self.cases.append(case)
 
-    def extract_from_text(self, scraped_text: str) -> dict[str, Any]:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Can we extract the docket number from the text?
 
         :param scraped_text: The content of the document downloaded
@@ -124,7 +199,7 @@ class Site(OpinionSiteLinear):
             return {"Docket": dockets.groupdict()}
         return {}
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -132,19 +207,21 @@ class Site(OpinionSiteLinear):
         """
         logger.info("Backscraping for range %s %s", *dates)
         self._set_parameters(*dates)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
     @staticmethod
     def cleanup_content(content: bytes) -> bytes:
-        """Remove hash altering timestamps to prevent duplicates
+        """Keep only the opinion content, without hash altering elements
 
+        On new-template pages, extracts the opinion container and discards
+        the surrounding site chrome (adblock banner, header, footer).
         Previously we've been more targeted about removing a href's but
         doctor will strip them out anyway so we should just clean our html
         content here.
 
         :param content: downloaded content `r.content`
-        :return: content without hash altering elements
+        :return: opinion content without hash altering elements
         """
         try:
             html_str = content.decode("utf-8")
@@ -154,9 +231,50 @@ class Site(OpinionSiteLinear):
         if not nh3.is_html(html_str):
             return content
 
+        # The Law Reporting Bureau page template (since ~April 2026) wraps
+        # the opinion in site chrome: a "disable Adblock" banner that is
+        # hidden client-side but always present in the HTML, header menus,
+        # breadcrumbs and a footer. Keep only the opinion container; older
+        # permanent-format pages have no such container and are cleaned
+        # whole. This must run before nh3, which strips the id attribute.
+        # #2058
+        tree = fromstring(html_str)
+        if opinion_container := tree.xpath('//main[@id="main"]'):
+            html_str = tostring(
+                opinion_container[0], encoding="unicode", with_tail=False
+            )
+        elif "adblock" in html_str[:5000].lower():
+            logger.warning(
+                "ny: page has new-template site chrome but the "
+                '//main[@id="main"] opinion container was not found; '
+                "chrome will not be stripped"
+            )
+
         # remove a tags
         allowed = set(nh3.ALLOWED_TAGS)
         allowed.discard("a")
 
         cleaned = nh3.clean(html_str, tags=allowed)
-        return cleaned.encode()
+
+        tree = fromstring(cleaned)
+        normalized_html = str(
+            tostring(tree, encoding="unicode", method="html")
+        )
+
+        # nh3.clean strips <!DOCTYPE>/<html>/<body> (not in nh3.ALLOWED_TAGS),
+        # which makes downstream content-based detectors (magika via doctor)
+        # misclassify the result as text/plain and skip the HTML extractor.
+        return (
+            f"<!DOCTYPE html><html><body>{normalized_html}</body></html>"
+        ).encode()
+
+    @staticmethod
+    def clean_docket_match(match: re.Match) -> str:
+        """Clean a docket number extracted from text
+
+        :param match: a Match object with a named group
+        :return: cleaned docket number
+        """
+        docket_number = match.group("docket_number")
+        docket_number = re.sub(r"(\||\n|<br>)", "; ", docket_number)
+        return re.sub("[\\s\n]+", " ", docket_number.strip("; ()"))

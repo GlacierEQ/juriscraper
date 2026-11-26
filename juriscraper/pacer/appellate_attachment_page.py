@@ -1,7 +1,8 @@
+import pathlib
 import pprint
 import re
 import sys
-from typing import Optional
+from typing import Never, NotRequired, TypedDict
 
 from lxml import html
 
@@ -18,6 +19,21 @@ from .reports import BaseReport
 logger = make_default_logger()
 
 
+class AppellateAttachmentPageDataAttachment(TypedDict):
+    attachment_number: int
+    description: str
+    page_count: int | None
+    pacer_doc_id: str | None
+    file_size_bytes: NotRequired[int]
+
+
+class AppellateAttachmentPageData(TypedDict):
+    pacer_doc_id: str | None
+    pacer_case_id: str | None
+    pacer_seq_no: str | None
+    attachments: list[AppellateAttachmentPageDataAttachment]
+
+
 class AppellateAttachmentPage(BaseReport):
     """An object for querying and parsing the appellate att. page report.
 
@@ -30,10 +46,10 @@ class AppellateAttachmentPage(BaseReport):
 
     PATH = "docs1/"
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         super().__init__(court_id, pacer_session)
 
-    def query(self, document_number):
+    async def query(self, document_number):
         """Query the "attachment page" endpoint and set the results to self.response.
 
         The appellate attachment page uses the a variable called dls_id
@@ -51,7 +67,7 @@ class AppellateAttachmentPage(BaseReport):
         document_number = f"{document_number[:3]}0{document_number[4:]}"
         url = self.url + document_number
         logger.info("Querying the attachment page endpoint at URL: %s", url)
-        self.response = self.session.get(url)
+        self.response = await self.session.get(url)
         self.parse()
 
     def _strip_bad_html_tags_insecure(self, text: str) -> None:
@@ -59,7 +75,7 @@ class AppellateAttachmentPage(BaseReport):
         self.tree = strip_bad_html_tags_insecure(text, remove_scripts=False)
 
     @property
-    def data(self) -> dict:
+    def data(self) -> AppellateAttachmentPageData | dict[Never, Never]:
         """Get data back from the query for the matching document entry.
 
         Appellate attachments is different than the district court.  We have
@@ -92,7 +108,7 @@ class AppellateAttachmentPage(BaseReport):
             logger.info("No documents found on attachment page.")
             return {}
 
-        result = {
+        result: AppellateAttachmentPageData = {
             "pacer_doc_id": self._get_main_pacer_doc_id(),
             "pacer_case_id": self._get_pacer_case_id(),
             "pacer_seq_no": self._get_pacer_seq_no(),
@@ -100,7 +116,7 @@ class AppellateAttachmentPage(BaseReport):
         }
 
         for row in rows:
-            attachment = {
+            attachment: AppellateAttachmentPageDataAttachment = {
                 "attachment_number": self._get_attachment_number(row),
                 "description": self._get_description_from_tr(row),
                 "page_count": self._get_page_count_from_tr(row),
@@ -123,9 +139,9 @@ class AppellateAttachmentPage(BaseReport):
         """
         try:
             rows = self.tree.xpath("//tbody/tr/td/a/@href")
-            pacer_doc_ids = []
-            for url_row in rows:
-                pacer_doc_ids.append(get_pacer_doc_id_from_doc1_url(url_row))
+            pacer_doc_ids = [
+                get_pacer_doc_id_from_doc1_url(url_row) for url_row in rows
+            ]
             return sorted(pacer_doc_ids)[0]
         except IndexError:
             return None
@@ -136,8 +152,7 @@ class AppellateAttachmentPage(BaseReport):
         :param row: Table row as an lxml element
         :return: Attachment number for row
         """
-        number = int(row.xpath(".//td/text()")[0].strip())
-        return number
+        return int(row.xpath(".//td/text()")[0].strip())
 
     def _get_description_from_tr(self, row: html.HtmlElement) -> str:
         """Get the description from the row
@@ -157,7 +172,7 @@ class AppellateAttachmentPage(BaseReport):
         return ""
 
     @staticmethod
-    def _get_page_count_from_tr(row: html.HtmlElement) -> Optional[int]:
+    def _get_page_count_from_tr(row: html.HtmlElement) -> int | None:
         """Take a row from the attachment table and return the page count as an
         int extracted from the cell specified by index.
 
@@ -165,7 +180,7 @@ class AppellateAttachmentPage(BaseReport):
         :return: Attachment page count
         """
         sum_doc_selected_parts = parse_sumDocSelected_from_row(row)
-        if sum_doc_selected_parts and "page_count" in sum_doc_selected_parts:
+        if sum_doc_selected_parts:
             return sum_doc_selected_parts["page_count"]
 
         description_text_nodes = row.xpath(".//td/text()")
@@ -174,20 +189,17 @@ class AppellateAttachmentPage(BaseReport):
         return int(description_text_nodes[-1].strip())
 
     @staticmethod
-    def _get_file_size_bytes_from_tr(row: html.HtmlElement) -> Optional[int]:
+    def _get_file_size_bytes_from_tr(row: html.HtmlElement) -> int | None:
         """Take a row from the attachment table and return the number of bytes
         as an int.
         """
         sum_doc_selected_parts = parse_sumDocSelected_from_row(row)
-        if (
-            sum_doc_selected_parts
-            and "file_size_bytes" in sum_doc_selected_parts
-        ):
+        if sum_doc_selected_parts:
             return sum_doc_selected_parts["file_size_bytes"]
         return None
 
     @staticmethod
-    def _get_pacer_doc_id(row: html.HtmlElement) -> Optional[str]:
+    def _get_pacer_doc_id(row: html.HtmlElement) -> str | None:
         """Take in a row from the attachment table and return the pacer_doc_id
         for the item in that row. Return None if the ID cannot be found.
 
@@ -206,7 +218,7 @@ class AppellateAttachmentPage(BaseReport):
             doc1_url = url.xpath("./@href")[0]
             return get_pacer_doc_id_from_doc1_url(doc1_url)
 
-    def _get_pacer_case_id(self) -> str:
+    def _get_pacer_case_id(self) -> str | None:
         """Get the pacer_case_id value by inspecting the function scripts
 
         :returns str: The pacer_case_id value
@@ -215,8 +227,9 @@ class AppellateAttachmentPage(BaseReport):
         m = re.search(r"[?&]caseid=(\d+)", script_html, flags=re.I)
         if m:
             return m.group(1)
+        return None
 
-    def _get_pacer_seq_no(self) -> str:
+    def _get_pacer_seq_no(self) -> str | None:
         """Get pacer sequence number.
         This value corresponds to the value in the docket TR
 
@@ -226,6 +239,7 @@ class AppellateAttachmentPage(BaseReport):
         m = re.search(r"[?&]d=(\d+)&outputForm", script_html, flags=re.I)
         if m:
             return m.group(1)
+        return None
 
 
 def main():
@@ -240,7 +254,7 @@ def main():
     )  # Court ID is only needed for querying.
     filepath = sys.argv[1]
     print(f"Parsing HTML file at {filepath}")
-    with open(filepath) as f:
+    with pathlib.Path(filepath).open() as f:
         text = f.read()
     report._parse_text(text)
     pprint.pprint(report.data, indent=2)

@@ -1,0 +1,45 @@
+[
+  {
+    "case_names": "In the Interest of R.P., a Child v. the State of Texas",
+    "nature_of_suit": "Termination of parental rights or conservatorship - accelerated",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=4df7389b-edc9-4524-8f5d-0116b9416d10&coa=coa04&DT=Opinion&MediaID=35d8989e-90fd-4831-a652-73deba171190",
+        "types": "020lead"
+      }
+    ],
+    "dispositions": "Reversed and Remanded",
+    "lower_courts": "408th Judicial District Court",
+    "lower_court_judges": "Honorable Raul Perales",
+    "lower_court_numbers": "2022-PA-01371",
+    "court_reporter": "David Zarate",
+    "case_dates": "2024-02-28",
+    "docket_numbers": "04-23-00828-CV",
+    "judges": "",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  },
+  {
+    "case_names": "In Re Cervantes v. the State of Texas",
+    "nature_of_suit": "Mandamus",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=83b1277e-ba95-42e4-be78-e17c9f17ef34&coa=coa04&DT=Opinion&MediaID=cdc3a948-253d-48e3-95f2-0bb25d332f8e",
+        "types": "020lead"
+      }
+    ],
+    "dispositions": "Motion or Writ Denied",
+    "lower_courts": "County Court",
+    "lower_court_judges": "Honorable David E. Garcia",
+    "lower_court_numbers": "1071",
+    "case_dates": "2024-02-21",
+    "docket_numbers": "04-23-00334-CR",
+    "judges": "",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  }
+]

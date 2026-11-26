@@ -1,12 +1,14 @@
+import datetime
+import pathlib
 import pprint
 import re
 import sys
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any, Literal, overload
 
+from httpx import Response
 from lxml import html
-from lxml.etree import _ElementUnicodeResult
-from requests import Response
+from lxml.html import HtmlElement
 
 from juriscraper.lib.judge_parsers import normalize_judge_string
 from juriscraper.lib.log_tools import make_default_logger
@@ -61,7 +63,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         r"<b>\d+ Documents are attached to this filing</b>",
     ]
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         BaseDocketReport.__init__(self, court_id)
         BaseReport.__init__(self, court_id, pacer_session)
 
@@ -77,30 +79,29 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
             return (
                 "https://dcecf.psc.uscourts.gov/n/beam/servlet/TransportRoom"
             )
-        elif self.court_id in ["ca5", "ca7", "ca11"]:
+        if self.court_id in ["ca5", "ca7", "ca11"]:
             return (
                 "https://ecf.%s.uscourts.gov/"
                 "cmecf/servlet/TransportRoom" % self.court_id
             )
-        else:
-            return (
-                "https://ecf.%s.uscourts.gov/"
-                "n/beam/servlet/TransportRoom" % self.court_id
-            )
+        return (
+            "https://ecf.%s.uscourts.gov/"
+            "n/beam/servlet/TransportRoom" % self.court_id
+        )
 
-    def query(
+    async def query(
         self,
-        docket_number,
-        show_docket_entries=False,
-        show_orig_docket=False,
-        show_prior_cases=False,
-        show_associated_cases=False,
-        show_panel_info=False,
-        show_party_atty_info=False,
-        show_caption=False,
-        date_start=None,
-        date_end=None,
-        output_format="html",
+        docket_number: str,
+        show_docket_entries: bool = False,
+        show_orig_docket: bool = False,
+        show_prior_cases: bool = False,
+        show_associated_cases: bool = False,
+        show_panel_info: bool = False,
+        show_party_atty_info: bool = False,
+        show_caption: bool = False,
+        date_start: datetime.date | None = None,
+        date_end: datetime.date | None = None,
+        output_format: Literal["html", "xml"] = "html",
     ):
         """
         Query PACER to get a docket report.
@@ -249,7 +250,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
             docket_number,
             query_params,
         )
-        self.response = self.session.get(self.url, params=query_params)
+        self.response = await self.session.get(self.url, params=query_params)
         self.parse()
 
     def parse(self):
@@ -261,9 +262,9 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         self._clear_caches()
         super().parse()
 
-    def download_pdf(
-        self, pacer_doc_id, pacer_case_id=None
-    ) -> tuple[Optional[Response], str]:
+    async def download_pdf(
+        self, pacer_doc_id: str, pacer_case_id: str | None = None
+    ) -> tuple[Response | None, str]:
         """Download a PDF from an appellate court.
 
         :param pacer_case_id: The case ID for the docket
@@ -327,7 +328,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         logger.info(
             "GETting PDF at URL: %s with params: %s", self.url, query_params
         )
-        r = self.session.get(self.url, params=query_params)
+        r = await self.session.get(self.url, params=query_params)
         r.raise_for_status()
 
         if b"Documents are attached to this filing" in r.content:
@@ -627,16 +628,17 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         return force_unicode(description)
 
     @staticmethod
-    def _get_page_count_from_tr(tr: html.HtmlElement) -> Optional[int]:
+    def _get_page_count_from_tr(tr: html.HtmlElement) -> int | None:
         """Take a row from the attachment table and return the page count as an
         int extracted from the input value.
         """
         count = get_input_value_from_tr(tr, 2, 4, " ")
         if count is not None:
             return int(count)
+        return None
 
     @staticmethod
-    def _get_file_size_bytes_from_tr(tr: html.HtmlElement) -> Optional[int]:
+    def _get_file_size_bytes_from_tr(tr: html.HtmlElement) -> int | None:
         """Take a row from the attachment table and return the number of bytes
         as an int.
         """
@@ -653,7 +655,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         return row.xpath(".//a/@data-pacer-doc-id")
 
     @staticmethod
-    def _get_pacer_seq_no_from_tr(row: html.HtmlElement) -> Optional[str]:
+    def _get_pacer_seq_no_from_tr(row: html.HtmlElement) -> str | None:
         """Take a row of the attachment table, and return the sequence number
         from the name attribute.
         """
@@ -719,7 +721,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
             view_multiple_documents = True
         docket_entries = []
         for row in docket_entry_rows:
-            de = {}
+            de: dict = {}
             cells = row.xpath("./td")
             if len(cells) == 0:
                 continue
@@ -745,7 +747,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
             de["pacer_doc_id"] = self._get_pacer_doc_id(cells[1])
             pacer_seq_no = self._get_pacer_seq_no(cells[1])
             if pacer_seq_no is not None:
-                de["pacer_seq_no"] = str(pacer_seq_no)
+                de["pacer_seq_no"] = pacer_seq_no
             if not de["document_number"]:
                 if de["pacer_doc_id"]:
                     # If we lack the document number, but have
@@ -766,7 +768,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         return docket_entries
 
     @staticmethod
-    def _get_document_number(cell):
+    def _get_document_number(cell) -> str | None:
         """Get the document number"""
         text_nodes = cell.xpath(".//text()[not(parent::font)]")
         text_nodes = list(map(clean_string, text_nodes))
@@ -776,19 +778,18 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         return None
 
     @staticmethod
-    def _get_pacer_doc_id(cell):
+    def _get_pacer_doc_id(cell) -> str | None:
         urls = cell.xpath(".//a")
         if not urls:
             # Entry exists but lacks a URL. Probably a minute order or similar.
             return None
-        else:
-            doc1_url = urls[0].xpath("./@href")[0]
-            return get_pacer_doc_id_from_doc1_url(doc1_url)
+        doc1_url = urls[0].xpath("./@href")[0]
+        return get_pacer_doc_id_from_doc1_url(doc1_url)
 
     @staticmethod
     def _get_pacer_seq_no(
         cell: html.HtmlElement,
-    ) -> Optional[_ElementUnicodeResult]:
+    ) -> str | None:
         """Take a row from the attachment table and return the input value by
         index.
         """
@@ -817,7 +818,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         case_name = self.tree.xpath(path)[0].text_content()
         return clean_string(harmonize(case_name))
 
-    def _get_panel(self):
+    def _get_panel(self) -> list[str]:
         """Get the panel information"""
         path = '//*[re:match(text(), "Panel Assignment")]/ancestor::td[1]'
         try:
@@ -829,10 +830,9 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         panel_string = self._get_tail_by_regex("Panel:", node=panel_table)
         if panel_string in ["", "Not available"]:
             return []
-        else:
-            return panel_string.split()
+        return panel_string.split()
 
-    def _get_case_type_info(self):
+    def _get_case_type_info(self) -> str:
         """Get the case type information and return it as a csv string"""
         path = (
             '//*[re:match(text(), "Case Type Information")]/'
@@ -852,7 +852,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         """Get all of the originating type information as a dict."""
         try:
             ogc_table = self.tree.re_xpath(
-                '//*[re:match(text(), "Originating Court Information")]/ancestor::table[1]'  # noqa
+                '//*[re:match(text(), "Originating Court Information")]/ancestor::table[1]'
             )[0]
         except IndexError:
             # No originating court info.
@@ -933,7 +933,26 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
                 ogc_info["date_received_coa"] = convert_date_string(date)
         return ogc_info
 
-    def _get_tail_by_regex(self, regex, cast_to_date=False, node=None):
+    @overload
+    def _get_tail_by_regex(
+        self,
+        regex: str,
+        cast_to_date: Literal[True],
+        node: HtmlElement | None = ...,
+    ) -> datetime.date | None: ...
+    @overload
+    def _get_tail_by_regex(
+        self,
+        regex: str,
+        cast_to_date: Literal[False] = ...,
+        node: HtmlElement | None = ...,
+    ) -> str: ...  # Note: empty string is sent instead of `None`
+    def _get_tail_by_regex(
+        self,
+        regex: str,
+        cast_to_date: bool = False,
+        node: HtmlElement | None = None,
+    ) -> str | datetime.date | None:
         """Search all text nodes for a string that matches the regex, then
         return the `tail`ing text.
 
@@ -950,8 +969,7 @@ class AppellateDocketReport(BaseDocketReport, BaseReport):
         except (IndexError, AttributeError):
             if cast_to_date:
                 return None
-            else:
-                return ""
+            return ""
         else:
             if cast_to_date:
                 return convert_date_string(tail)
@@ -974,7 +992,7 @@ def _main():
     )  # Court ID is only needed for querying.
     filepath = sys.argv[1]
     print(f"Parsing HTML file at {filepath}")
-    with open(filepath) as f:
+    with pathlib.Path(filepath).open() as f:
         text = f.read()
     report._parse_text(text)
     pprint.pprint(report.data, indent=2)

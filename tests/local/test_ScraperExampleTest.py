@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 
 
-import glob
 import json
 import logging
-import os
+import pathlib
 import sys
 import time
 import unittest
@@ -17,7 +16,7 @@ from juriscraper.lib.test_utils import (
 )
 
 
-class ScraperExampleTest(unittest.TestCase):
+class ScraperExampleTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.maxDiff = 1000
         # Disable logging
@@ -27,7 +26,7 @@ class ScraperExampleTest(unittest.TestCase):
         # Re-enable logging
         logging.disable(logging.NOTSET)
 
-    def run_tests_on_module_str(self, module_str: str) -> None:
+    async def run_tests_on_module_str(self, module_str: str) -> None:
         """Finds all the $module_example* files and tests them with the sample
         scraper.
         """
@@ -60,17 +59,14 @@ class ScraperExampleTest(unittest.TestCase):
             # ...  - rest of the path
             # [-1] - module name
             module_parts = module_string.split(".")
-            example_path = os.path.join(
-                "tests",
-                "examples",
-                module_parts[1],
-                "united_states",
-                module_parts[-1],
+            example_dir = pathlib.Path(
+                "tests", "examples", module_parts[1], "united_states"
             )
+            example_path = example_dir / module_parts[-1]
             paths = [
                 path
-                for path in glob.glob(f"{example_path}_example*")
-                if not path.endswith(json_compare_extension)
+                for path in example_dir.glob(f"{module_parts[-1]}_example*")
+                if not path.name.endswith(json_compare_extension)
             ]
             self.assertTrue(
                 paths,
@@ -78,7 +74,7 @@ class ScraperExampleTest(unittest.TestCase):
                 "%s"
                 % (
                     module_string.rsplit(".", 1)[1],
-                    os.path.join(os.getcwd(), example_path),
+                    pathlib.Path.cwd() / example_path,
                 ),
             )
             num_example_files += len(paths)
@@ -86,23 +82,23 @@ class ScraperExampleTest(unittest.TestCase):
             num_tests = len(paths)
             for path in paths:
                 # This loop allows multiple example files per module
-                if path.endswith("~"):
+                if path.name.endswith("~"):
                     # Text editor backup: Not interesting.
                     continue
                 site = mod.Site(cnt=cnt)
-                site.url = path
+                site.mock_url = str(path)
                 # Forces a local GET
                 site.enable_test_mode()
-                site.parse()
+                await site.parse()
                 # Now validate that the parsed result is as we expect
-                json_path = f"{path.rsplit('.', 1)[0]}{json_compare_extension}"
+                json_path = path.with_name(
+                    f"{path.stem}{json_compare_extension}"
+                )
                 json_data = json.loads(site.to_json())
-                if os.path.isfile(json_path):
+                if json_path.is_file():
                     # Compare result with corresponding json file
-                    example_file = path.rsplit("/", 1)[1]
-                    compare_file = json_path.rsplit("/", 1)[1]
                     with (
-                        open(json_path) as input_file,
+                        json_path.open() as input_file,
                         self.subTest(
                             "Testing example files",
                             json_path=json_path,
@@ -132,8 +128,8 @@ class ScraperExampleTest(unittest.TestCase):
                     # already exist. This should only happen once
                     # when adding a new example html file.
                     warn_generated_compare_file(json_path)
-                    json_compare_files_generated.append(json_path)
-                    with open(json_path, "w") as json_example:
+                    json_compare_files_generated.append(str(json_path))
+                    with json_path.open("w") as json_example:
                         json.dump(json_data, json_example, indent=2)
             t2 = time.time()
             duration = t2 - t1
@@ -171,40 +167,45 @@ class ScraperExampleTest(unittest.TestCase):
                 "good work!"
             )
 
-    def test_scrape_opinion_admin_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_admin_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.administrative_agency"
         )
 
-    def test_scrape_opinion_fed_app_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_fed_app_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.federal_appellate"
         )
 
-    def test_scrape_opinion_fed_bankr_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_fed_bankr_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.federal_bankruptcy"
         )
 
-    def test_scrape_opinion_fed_dist_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_fed_dist_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.federal_district"
         )
 
-    def test_scrape_opinion_fed_special_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_fed_special_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.federal_special"
         )
 
-    def test_scrape_opinion_state_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_state_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.state"
         )
 
-    def test_scrape_oral_arg_example_files(self):
-        self.run_tests_on_module_str("juriscraper.oral_args")
+    async def test_scrape_oral_arg_example_files(self):
+        await self.run_tests_on_module_str("juriscraper.oral_args")
 
-    def test_scrape_opinion_territories_example_files(self):
-        self.run_tests_on_module_str(
+    async def test_scrape_opinion_territories_example_files(self):
+        await self.run_tests_on_module_str(
             "juriscraper.opinions.united_states.territories"
+        )
+
+    async def test_scrape_opinion_attorney_general_example_files(self):
+        await self.run_tests_on_module_str(
+            "juriscraper.opinions.united_states.attorney_general"
         )

@@ -11,8 +11,16 @@ History:
 """
 
 from datetime import date, timedelta
+from urllib.parse import urljoin
 
-from juriscraper.AbstractSite import logger
+import httpx
+from typing_extensions import override
+
+from juriscraper.AbstractSite import (
+    MissingRequestResponseException,
+    UnexpectedRequestResponseException,
+    logger,
+)
 from juriscraper.OralArgumentSiteLinear import OralArgumentSiteLinear
 
 
@@ -21,6 +29,7 @@ class Site(OralArgumentSiteLinear):
     first_opinion_date = date(2003, 2, 4)
 
     def __init__(self, *args, **kwargs):
+        kwargs.setdefault("verify", False)
         super().__init__(*args, **kwargs)
         self.court_id = self.__module__
         self.expected_content_types = ["audio/mpeg3"]
@@ -29,10 +38,7 @@ class Site(OralArgumentSiteLinear):
         self.needs_special_headers = True
         self.request.update(
             {
-                "verify": False,
-                "headers": {
-                    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-                },
+                "headers": {"User-Agent": self.chrome_user_agent},
             }
         )
 
@@ -40,7 +46,8 @@ class Site(OralArgumentSiteLinear):
         self.end_date = None
         self.make_backscrape_iterable(kwargs)
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Extract content from JSON response
 
         Each row in the json returns a list of values, see example below.
@@ -58,24 +65,34 @@ class Site(OralArgumentSiteLinear):
             # Get the data JSON
             self.method = "POST"
             self._set_parameters()
-            self._request_url_post(self.data_url)
+            await self._request_url_post(self.data_url)
+
+        if self.request["response"] is None:
+            raise MissingRequestResponseException
+        if not isinstance(self.request["response"], httpx.Response):
+            raise UnexpectedRequestResponseException
 
         for row in self.request["response"].json()["data"]:
             _, name, _, url, _ = row[2].split('"')
             self.cases.append(
-                {"date": row[0], "docket": row[1], "name": name, "url": url}
+                {
+                    "date": row[0],
+                    "docket": row[1],
+                    "name": name,
+                    "url": urljoin(self.url, url),
+                }
             )
 
-    def _download_backwards(self, d: date) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Download a months' worth of oral arguments.
 
-        :param d: Date to download arguments starting from
+        :param dates: (start_date, end_date) tuple
         :return: None
         """
-        self.start_date, self.end_date = d
-        logger.info("Backscraping for range %s %s", *d)
-        self.html = self._download()
-        self._process_html()
+        self.start_date, self.end_date = dates
+        logger.info("Backscraping for range %s %s", *dates)
+        self.html = await self._download()
+        await self._process_html()
 
     def _set_parameters(self) -> None:
         """Set the parameters for the request.

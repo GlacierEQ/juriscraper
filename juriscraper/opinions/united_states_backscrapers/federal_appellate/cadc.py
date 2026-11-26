@@ -35,16 +35,14 @@ class Site(OpinionSite):
         )
 
     def _get_case_dates(self):
-        dates = []
-        for date_string in self.html.xpath(
-            "//div[@class='row-entry'][position() mod 2 = 0]/span[2]/text()"
-        ):
-            dates.append(
-                date.fromtimestamp(
-                    time.mktime(time.strptime(date_string, "%m/%d/%Y"))
-                )
+        return [
+            date.fromtimestamp(
+                time.mktime(time.strptime(date_string, "%m/%d/%Y"))
             )
-        return dates
+            for date_string in self.html.xpath(
+                "//div[@class='row-entry'][position() mod 2 = 0]/span[2]/text()"
+            )
+        ]
 
     def _get_docket_numbers(self):
         return list(
@@ -54,14 +52,14 @@ class Site(OpinionSite):
         )
 
     def _get_precedential_statuses(self):
-        return ["Published" for _ in range(0, len(self.case_names))]
+        return ["Published" for _ in range(len(self.case_names))]
 
-    def _download_backwards(self, d):
+    async def _download_backwards(self, d):
         self.url = "https://www.cadc.uscourts.gov/internet/opinions.nsf/OpinionsByRDate?OpenView&count=100&SKey={}".format(
             d.strftime("%Y%m")
         )
 
-        self.html = self._download()
+        self.html = await self._download()
         if self.html is not None:
             # Setting status is important because it prevents the download
             # function from being run a second time by the parse method.

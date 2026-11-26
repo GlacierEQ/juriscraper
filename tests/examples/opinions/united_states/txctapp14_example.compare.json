@@ -1,0 +1,53 @@
+[
+  {
+    "case_names": "Red Bluff, LLC v. Nicole Tarpley",
+    "nature_of_suit": "Miscellaneous/other civil",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=175cc026-51ab-4d0e-871c-d4f8d7980a47&coa=coa14&DT=Opinion&MediaID=aa03c93d-2cbb-4ede-8b17-2600956b20f7",
+        "types": "020lead",
+        "authors": "Jewell"
+      },
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=64ab4990-979b-4967-981d-9dcb18ef7b57&coa=coa14&DT=Opinion&MediaID=0ba2e464-3cc6-4a65-a091-5f2511115baa",
+        "types": "040dissent",
+        "authors": "McLaughlin"
+      }
+    ],
+    "dispositions": "REVERSED AND REMANDED",
+    "lower_courts": "55th District Court",
+    "lower_court_judges": "",
+    "lower_court_numbers": "2016-50146",
+    "court_reporter": "Tamika Bartee",
+    "case_dates": "2026-11-05",
+    "docket_numbers": "14-25-01066-CV",
+    "judges": "Christopher; Jewell; McLaughlin",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  },
+  {
+    "case_names": "Devan Kristopher Jordan v. the State of Texas",
+    "nature_of_suit": "Capital Murder",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=f2247b38-ae90-4fc9-a71a-d27952d09383&coa=coa14&DT=Opinion&MediaID=d57ac54a-fea3-4b87-8db1-e7d311db1b3c",
+        "types": "020lead",
+        "authors": "Wise"
+      }
+    ],
+    "dispositions": "AFFIRMED",
+    "lower_courts": "56th District Court",
+    "lower_court_judges": "",
+    "lower_court_numbers": "21-CR-4111",
+    "court_reporter": "Monica Victor",
+    "case_dates": "2026-11-05",
+    "docket_numbers": "14-24-00860-CR",
+    "judges": "Wise; Hart; Boatman",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  }
+]

@@ -1,4 +1,17 @@
+from typing import Any, Literal
+
 from juriscraper.AbstractSite import AbstractSite
+
+# The basic form of the result of `extract_from_text()`.
+# TODO: Gradually increase structure, to TypedDict and @dataclass
+ExtractedMetaData = dict[
+    Literal["Docket"]
+    | Literal["OpinionCluster"]
+    | Literal["Citation"]
+    | Literal["Opinion"]
+    | Literal["OriginatingCourtInformation"],
+    Any,
+]
 
 
 class OpinionSite(AbstractSite):
@@ -41,6 +54,7 @@ class OpinionSite(AbstractSite):
             "other_dates",
             "attorneys",
             "headnotes",
+            "content",
         ]
         self._req_attrs = [
             "case_dates",
@@ -146,11 +160,15 @@ class OpinionSite(AbstractSite):
     def _get_headnotes(self):
         return None
 
-    def extract_from_text(self, scraped_text: str) -> dict:
-        """Pass scraped text into function and return data as a dictionary
+    def _get_content(self):
+        return None
 
-        :param opinion_text: Text of scraped content
-        :return: dictionary of information
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """
+        This function extracts information from the scraped text of an opinion.
+
+        :param scraped_text: Text of scraped content
+        :return: metadata extracted from scraped text
         """
         return {}
 

@@ -1,14 +1,16 @@
 [
   {
     "case_dates": "2025-06-16",
-    "case_names": "Mark a Hackel v. MacOmb County Board of Commissioners",
+    "case_names": "Mark a Hackel v. Macomb County Board of Commissioners",
     "download_urls": "https://www.courts.michigan.gov/49d812/siteassets/case-documents/uploads/opinions/final/sct/166363_52_01.pdf",
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166363",
-    "lower_courts": "MacOmb Circuit Court",
-    "case_name_shorts": ""
+    "lower_courts": "Macomb Circuit Court",
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-05-27",
@@ -17,9 +19,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166627",
-    "lower_courts": "MacOmb Circuit Court",
-    "case_name_shorts": ""
+    "lower_courts": "Macomb Circuit Court",
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-14",
@@ -28,9 +32,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166663",
     "lower_courts": "Saginaw Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-14",
@@ -39,9 +45,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166509",
     "lower_courts": "Wayne Juvenile Division",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-10",
@@ -50,9 +58,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166428",
     "lower_courts": "Genesee Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-10",
@@ -61,9 +71,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166654",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-04",
@@ -72,20 +84,24 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166473",
     "lower_courts": "Ottawa Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-02",
-    "case_names": "Test Name",
+    "case_names": "Placeholder case name",
     "download_urls": "https://www.courts.michigan.gov/49da8e/siteassets/case-documents/uploads/opinions/final/sct/165233_91_01.pdf",
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
-    "docket_numbers": "165233",
+    "dispositions": "",
+    "docket_numbers": "Placeholder docket number",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": "Test Name"
+    "case_name_shorts": "Placeholder case name",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-01",
@@ -94,9 +110,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165445",
-    "lower_courts": "MacOmb Circuit Court",
-    "case_name_shorts": ""
+    "lower_courts": "Macomb Circuit Court",
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-04-01",
@@ -105,9 +123,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166813",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-03-28",
@@ -116,9 +136,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166297",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-03-27",
@@ -127,9 +149,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166459",
     "lower_courts": "Emmet Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-03-26",
@@ -138,9 +162,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166190",
     "lower_courts": "Tax Tribunal",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-03-24",
@@ -149,9 +175,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165392",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-03-24",
@@ -160,9 +188,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165391",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2025-02-03",
@@ -171,9 +201,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165763",
     "lower_courts": "Ingham Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-12-30",
@@ -182,9 +214,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165761",
     "lower_courts": "Kalamazoo Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-12-27",
@@ -193,9 +227,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165544",
     "lower_courts": "Livingston Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-12-26",
@@ -204,9 +240,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164098",
     "lower_courts": "Genesee Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-12-26",
@@ -215,9 +253,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "158893",
     "lower_courts": "Isabella Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-08-28",
@@ -226,9 +266,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166424",
     "lower_courts": "Court of Claims",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-31",
@@ -237,9 +279,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164869",
-    "lower_courts": "MacOmb Circuit Court",
-    "case_name_shorts": ""
+    "lower_courts": "Macomb Circuit Court",
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-31",
@@ -248,9 +292,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165325",
     "lower_courts": "Court of Claims",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-31",
@@ -259,9 +305,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165166",
     "lower_courts": "Court of Claims",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-30",
@@ -270,9 +318,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "166305",
     "lower_courts": "Court of Claims",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-30",
@@ -281,9 +331,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165377",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-29",
@@ -292,9 +344,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164685",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-29",
@@ -303,9 +357,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164975",
     "lower_courts": "Kent Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-29",
@@ -314,9 +370,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165219",
     "lower_courts": "Court of Claims",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-29",
@@ -325,9 +383,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165425",
     "lower_courts": "Ingham Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-29",
@@ -336,9 +396,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165441",
     "lower_courts": "Alpena Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-26",
@@ -347,9 +409,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "163961",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-26",
@@ -358,9 +422,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165296",
     "lower_courts": "St Clair Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-26",
@@ -369,9 +435,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164900",
     "lower_courts": "Washtenaw Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-25",
@@ -380,9 +448,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "163939",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-25",
@@ -391,9 +461,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "162302",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-25",
@@ -402,9 +474,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "163226",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-22",
@@ -413,9 +487,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164598",
     "lower_courts": "Otsego Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-22",
@@ -424,9 +500,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164360",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-22",
@@ -435,9 +513,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165450",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-18",
@@ -446,9 +526,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164902",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-16",
@@ -457,9 +539,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164133",
     "lower_courts": "Allegan Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-12",
@@ -468,9 +552,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164050",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-11",
@@ -479,9 +565,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "163805",
     "lower_courts": "Eaton Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-11",
@@ -490,9 +578,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "164158",
     "lower_courts": "Wayne Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-10",
@@ -501,9 +591,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165741",
     "lower_courts": "Livingston Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-08",
@@ -512,9 +604,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165185",
     "lower_courts": "Kalamazoo Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-08",
@@ -523,9 +617,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "163120",
     "lower_courts": "Oakland Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-05",
@@ -534,9 +630,11 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165664",
     "lower_courts": "Kalamazoo Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   },
   {
     "case_dates": "2024-07-01",
@@ -545,8 +643,10 @@
     "precedential_statuses": "Published",
     "blocked_statuses": false,
     "date_filed_is_approximate": false,
+    "dispositions": "",
     "docket_numbers": "165770",
     "lower_courts": "Lapeer Circuit Court",
-    "case_name_shorts": ""
+    "case_name_shorts": "",
+    "per_curiam": false
   }
 ]

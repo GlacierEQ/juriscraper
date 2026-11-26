@@ -1,13 +1,19 @@
 import os
+import pathlib
 import traceback
+from collections.abc import AsyncGenerator, Callable, Iterable
 from logging import getLogger
+from types import ModuleType
+from typing import cast
 
-from requests import HTTPError
+from httpx import HTTPError
+
+from juriscraper.AbstractSite import AbstractSite
 
 logger = getLogger()
 
 
-def build_module_list(court_id):
+def build_module_list(court_id: str) -> list[str]:
     """Takes a string and builds up a list of modules to import.
 
     This is a simple recursive function that iteratively looks for __all__
@@ -25,7 +31,7 @@ def build_module_list(court_id):
     """
     module_strings = []
 
-    def find_all_attr_or_punt(court_id):
+    def find_all_attr_or_punt(court_id: str) -> None:
         """Checks that we have an __all__ attribute. If so, recurses. If not,
         adds the item to our list
         """
@@ -56,10 +62,8 @@ def build_module_list(court_id):
     return module_strings
 
 
-def get_module_by_name(name):
-    db_root = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "opinions")
-    )
+def get_module_by_name(name: str) -> AbstractSite | None:
+    db_root = (pathlib.Path(__file__).parent.parent / "opinions").resolve()
     for dirName, _subdirList, fileList in os.walk(db_root):
         for fname in fileList:
             if f"{name}.py" == fname:
@@ -73,15 +77,31 @@ def get_module_by_name(name):
                     locals(),
                     [module],
                 )
-                return juriscraper_module.Site()
+                site_class = cast(type[AbstractSite], juriscraper_module.Site)
+                return site_class()
+    return None
 
 
-def site_yielder(iterable, mod, save_response_fn=None):
+async def site_yielder(
+    iterable: Iterable[object],
+    mod: ModuleType,
+    save_response_fn: Callable[[AbstractSite], None] | None = None,
+) -> AsyncGenerator[AbstractSite, None]:
+    """Yield sites whose sessions stay open until iteration advances.
+
+    Use ``contextlib.aclosing`` when consuming this generator so early exits
+    also close the current site.
+    """
+    site_class = cast(type[AbstractSite], mod.Site)
+
     for i in iterable:
-        site = mod.Site(save_response_fn=save_response_fn)
-        try:
-            site._download_backwards(i)
+        async with site_class(save_response_fn=save_response_fn) as site:
+            # Empty pages are expected during historical backscrapes, so don't
+            # let no_results_warning log an error for this court.
+            site.should_have_results = False
+            try:
+                await site._download_backwards(i)
+            except HTTPError:
+                logger.debug("%s", traceback.format_exc())
+                continue
             yield site
-        except HTTPError:
-            logger.debug("%s", traceback.format_exc())
-            continue

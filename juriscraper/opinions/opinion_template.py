@@ -8,9 +8,10 @@ History:
 """
 
 from lxml import html
+from typing_extensions import override
 
 from juriscraper.lib.string_utils import convert_date_string, titlecase
-from juriscraper.OpinionSite import OpinionSite
+from juriscraper.OpinionSite import ExtractedMetaData, OpinionSite
 
 
 class Site(OpinionSite):
@@ -24,7 +25,6 @@ class Site(OpinionSite):
         # if a POST, use these two attributes, otherwise, delete them.
         self.parameters = {}
         self.method = "POST"
-        self.uses_selenium = False
 
     """
     Required fields - InsanityExceptions will be thrown if omitted.
@@ -105,25 +105,25 @@ class Site(OpinionSite):
         """
         This is typically of the form ##-####
         """
-        return None
+        return
 
     def _get_citations(self):
         """
         A citation for the case.
         """
-        return None
+        return
 
     def _get_parallel_citations(self):
         """
         A second citation for the case.
         """
-        return None
+        return
 
     def _get_judges(self):
         """
         For the name of the judge authoring the lead opinion
         """
-        return None
+        return
 
     def _get_lower_courts(self):
         """
@@ -131,20 +131,20 @@ class Site(OpinionSite):
         from which the case was appealed would go here. So, a 9th Circuit
         case might be appealed from the 'N.D. Cal.' which would go here.
         """
-        return None
+        return
 
     def _get_nature_of_suit(self):
         """
         Some courts provide a NOS code or phrase giving the subject matter
         of the case, such as 'Contract' 'Civil Rights' 'Immigration' etc.
         """
-        return None
+        return
 
     def _get_summaries(self):
         """
         Some courts provide a summary of the case or the opinion's holding.
         """
-        return None
+        return
 
     """
     Optional fields
@@ -156,21 +156,21 @@ class Site(OpinionSite):
         """
         Similar to a docket number, but found only in bankruptcy cases.
         """
-        return None
+        return
 
     def _get_causes(self):
         """
         Some courts will give the plaintiff's or appellant's cause of action
         such as 'Employment' 'Trademark' etc.
         """
-        return None
+        return
 
     def _get_dispositions(self):
         """
         Affirmed, Reversed, Vacated; if longer than a sentence, should
         probably use _get_summaries instead.
         """
-        return None
+        return
 
     def _get_docket_attachment_numbers(self):
         """
@@ -178,14 +178,14 @@ class Site(OpinionSite):
         Item number 12, for example, might be a declaration with several
         attachments, numbered 1-5. That number, from 1-5, goes here.
         """
-        return None
+        return
 
     def _get_docket_document_numbers(self):
         """
         A document appears on a docket. Each line on the docket has a number.
         Those numbers go here.
         """
-        return None
+        return
 
     def _get_lower_court_judges(self):
         """
@@ -194,7 +194,7 @@ class Site(OpinionSite):
         case might be appealed from the N.D. Cal. and the judge from that
         court that handled the case would go here.
         """
-        return None
+        return
 
     def _get_lower_court_numbers(self):
         """
@@ -203,11 +203,22 @@ class Site(OpinionSite):
         case might be appealed from the N.D. Cal. and the docket number or
         other relevant case numbers from that court would go here.
         """
-        return None
+        return
 
     """
     Optional methods for special purposes
     """
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """
+        This function extracts information from the scraped text of an opinion.
+
+        :param scraped_text: Text of scraped content
+        :return: metadata extracted from scraped text
+        """
+
+        return super().extract_from_text(scraped_text)
 
     @staticmethod
     def cleanup_content(content):
@@ -225,7 +236,7 @@ class Site(OpinionSite):
         """
         return content
 
-    def _download_backwards(self, date_str):
+    async def _download_backwards(self, date_str):
         """
         This is a simple method that can be used to generate Site objects
         that can be used to paginate through a court's entire website.
@@ -243,4 +254,4 @@ class Site(OpinionSite):
         development.
         """
         self.url = f"http://example.com/new/url/{date_str}"
-        self.html = self._download()
+        self.html = await self._download()

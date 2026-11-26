@@ -1,34 +1,25 @@
+import asyncio
+import json
 import random
-import ssl
-import time
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from requests import Session
-from requests.adapters import HTTPAdapter
-from urllib3.util import create_urllib3_context
+import httpx
 
+from juriscraper.lib.exceptions import PacerLoginException, ParsingException
 from juriscraper.lib.log_tools import make_default_logger
+
+if TYPE_CHECKING:
+    from juriscraper.pacer.http import PacerSession
 
 logger = make_default_logger()
 
-
-class SSLAdapter(HTTPAdapter):
-    def __init__(
-        self, ssl_version=ssl.PROTOCOL_TLSv1_2, ciphers=None, **kwargs
-    ):
-        self.ssl_version = ssl_version or ssl.PROTOCOL_TLS
-        self.ssl_context = create_urllib3_context(
-            ssl_version=self.ssl_version, ciphers=ciphers
-        )
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, *args, **kwargs):
-        kwargs["ssl_context"] = self.ssl_context
-        return super().init_poolmanager(*args, **kwargs)
+# ACMS pages embed their data as a JavaScript assignment inside a <script>
+# tag; the object that follows this marker is plain JSON.
+ACMS_VIEW_MODEL_MARKER = "window.showDocViewModel = "
 
 
-def add_delay(delay=0, deviation=0):
+async def add_delay(delay: int = 0, deviation: int = 0) -> None:
     """Create a semi-random delay.
 
     Delay is the number of seconds your program will be stopped for, and
@@ -38,7 +29,33 @@ def add_delay(delay=0, deviation=0):
 
     duration = random.randrange(delay - deviation, delay + deviation)
     logger.info(f"Adding a delay of {duration} seconds. Please wait.")
-    time.sleep(duration)
+    await asyncio.sleep(duration)
+
+
+def extract_acms_view_model(html: str) -> dict[str, Any]:
+    """Return the ``window.showDocViewModel`` object embedded in an ACMS page.
+
+    The object is decoded in place with ``raw_decode`` rather than matched
+    with a regex, so nested braces in the data cannot truncate it.
+
+    :param html: The text of an ACMS page or HTMX fragment.
+    :return: The decoded view model.
+    :raises ParsingException: if the page carries no view model, or the
+        view model is not a JSON object.
+    """
+    start = html.find(ACMS_VIEW_MODEL_MARKER)
+    if start == -1:
+        raise ParsingException("No showDocViewModel found in the ACMS page.")
+    start += len(ACMS_VIEW_MODEL_MARKER)
+    try:
+        view_model, _ = json.JSONDecoder().raw_decode(html, start)
+    except json.JSONDecodeError as exc:
+        raise ParsingException(
+            "Could not decode showDocViewModel in the ACMS page."
+        ) from exc
+    if not isinstance(view_model, dict):
+        raise ParsingException("showDocViewModel is not a JSON object.")
+    return view_model
 
 
 class AcmsApiClient:
@@ -52,11 +69,110 @@ class AcmsApiClient:
     )
     CASE_DETAILS_ENDPOINT = "CaseDetailsByCaseId/{case_id}"
     DOCKET_ENTRIES_ENDPOINT = "DocketEntriesByCaseId/{case_id}"
+    ATTACHMENTS_ENDPOINT = "DocketEntryDocumentsByDocketId/{entry_id}"
+    CASE_SEARCH_ENDPOINT = "CaseSearch/{docket_number}"
+    MERGE_PDF_ENDPOINT = "MergePDFFiles/"
+    GET_PDF_ENDPOINT = "GetMergedFile/"
+    # The cookie-authenticated case page on the showdoc host, not the API.
+    INDEX_CONTENT_URL_TEMPLATE = (
+        "https://{court_id}-showdoc.azurewebsites.us/Home/IndexContent"
+    )
 
-    def __init__(self, session: Session, court_id: str):
+    def __init__(self, session: "PacerSession", court_id: str):
         self.session = session
         self.court_id = court_id
         self.base_url = self.BASE_URL_TEMPLATE.format(court_id=self.court_id)
+        self.index_content_url = self.INDEX_CONTENT_URL_TEMPLATE.format(
+            court_id=self.court_id
+        )
+
+    @staticmethod
+    def _is_login_redirect(response: httpx.Response) -> bool:
+        """Whether ACMS bounced this request to a login page.
+
+        An invalid or expired ACMS cookie session answers with a redirect to
+        ``/Auth/Login`` on the court's showdoc host, which then forwards to
+        PACER's login form.
+        """
+        urls = [str(r.url) for r in [*response.history, response]]
+        return any("/Auth/Login" in url or "login.jsf" in url for url in urls)
+
+    @staticmethod
+    def _user_data_from_view_model(
+        view_model: dict[str, Any],
+    ) -> dict[str, str]:
+        """Read the ``CsoId`` and ``ContactType`` body fields the API expects
+        from the page's ``showDocUser`` object.
+
+        :param view_model: The decoded ``showDocViewModel`` object.
+        :return: The user data, or an empty dict when the page does not
+            report both the account id and the contact type.
+        """
+        user = view_model.get("showDocUser")
+        if not isinstance(user, dict):
+            return {}
+        cso_id = user.get("csoId")
+        contact_type = user.get("contactType")
+        if not cso_id or not contact_type:
+            return {}
+        return {"CsoId": str(cso_id), "ContactType": str(contact_type)}
+
+    async def get_index_content(self, case_identifier: str) -> dict[str, Any]:
+        """Load a case's IndexContent page and keep the API token it carries.
+
+        ``/Home/IndexContent`` is the cookie-authenticated HTMX fragment ACMS
+        renders for a case. Besides the case data (``caseDetails``), it embeds
+        the bearer token the ``showdocservices`` API requires, which ACMS no
+        longer returns during login, and the account data (``showDocUser``)
+        the API wants in request bodies. Call this before any other method
+        of this client: both are stored on the session through
+        ``store_acms_token``.
+
+        Like the API calls, this request is made with the user's PACER
+        account and may incur charges.
+
+        :param case_identifier: The docket number to show, e.g. ``26-7519``.
+        :return: The decoded ``showDocViewModel`` object.
+        :raises PacerLoginException: if ACMS redirects to its login page. The
+            court's cookie jar is dropped so the next request re-establishes
+            it.
+        :raises ParsingException: if the page carries no view model.
+        """
+        logger.info(
+            "Fetching ACMS IndexContent for %s case %s",
+            self.court_id,
+            case_identifier,
+        )
+        response = await self.session.get(
+            self.index_content_url,
+            params={"caseIdentifier": case_identifier},
+        )
+        if self._is_login_redirect(response):
+            self.session.acms_cookies.pop(self.court_id, None)
+            raise PacerLoginException(
+                f"ACMS redirected to its login page for {self.court_id}; "
+                "the ACMS session is no longer valid."
+            )
+        response.raise_for_status()
+        view_model = extract_acms_view_model(response.text)
+        token = (view_model.get("authTokenResult") or {}).get("token")
+        if not token or not isinstance(token, str):
+            logger.warning(
+                "ACMS IndexContent for %s carried no usable API token.",
+                self.court_id,
+            )
+            return view_model
+        user_data = self._user_data_from_view_model(view_model)
+        if not user_data:
+            logger.warning(
+                "ACMS IndexContent for %s carried no account data; API calls "
+                "that need it will fail.",
+                self.court_id,
+            )
+        self.session.store_acms_token(
+            self.court_id, {"Token": token}, user_data
+        )
+        return view_model
 
     def _map_case_details_response(
         self, raw_data: dict[str, Any]
@@ -175,36 +291,242 @@ class AcmsApiClient:
         docket_info["docketEntries"] = entries
         return docket_info
 
-    def get_case_details(self, case_id: str) -> dict[str, Any]:
+    def _map_docket_entry_document(
+        self, raw_doc_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Maps a raw dictionary representing a docket entry document to a
+        standardized format.
+
+
+        :param raw_doc_data: A single dictionary object for a document.
+
+        :return: A dictionary containing the mapped document details.
+                Returns an empty dictionary if raw_doc_data is None or empty.
+        """
+        if not raw_doc_data:
+            return {}
+
+        return {
+            "docketDocumentDetailsId": raw_doc_data.get(
+                "acms_docketdocumentdetailsid"
+            ),
+            "name": raw_doc_data.get("acms_name"),
+            "documentUrl": raw_doc_data.get("acms_documenturl"),
+            "caseFilingDocumentUrl": raw_doc_data.get(
+                "acms_casefilingdocumenturl"
+            ),
+            "documentPermission": raw_doc_data.get("acms_documentpermission"),
+            "pageCount": raw_doc_data.get("acms_pagecount"),
+            "fileSize": raw_doc_data.get("acms_filesize"),
+            "createdOn": raw_doc_data.get("createdon"),
+            "billablePages": raw_doc_data.get("billablePages"),
+            "cost": raw_doc_data.get("cost"),
+            "documentNumber": raw_doc_data.get("acms_documentnumber"),
+            "searchValue": raw_doc_data.get("searchValue"),
+            "searchTransaction": raw_doc_data.get("searchTransaction"),
+        }
+
+    def _require_token(self) -> None:
+        """Refuse an API call when no bearer token is stored for the court.
+
+        The API answers 401 to anonymous requests. Failing before the request
+        points the caller at ``get_index_content``, which is where the token
+        comes from.
+
+        :raises PacerLoginException: if ``get_index_content`` has not run for
+            this court on this session.
+        """
+        if not self.session.acms_tokens.get(self.court_id):
+            raise PacerLoginException(
+                f"No ACMS API token for {self.court_id}. Call "
+                "get_index_content() first to obtain one."
+            )
+
+    def _user_data(self) -> dict[str, str]:
+        """Return the account fields the API expects in request bodies.
+
+        :raises PacerLoginException: if the IndexContent page reported no
+            account data, so no request body can be built.
+        """
+        cso_id = self.session.acms_user_data.get("CsoId")
+        contact_type = self.session.acms_user_data.get("ContactType")
+        if not cso_id or not contact_type:
+            raise PacerLoginException(
+                f"No ACMS account data for {self.court_id}; the IndexContent "
+                "page reported none."
+            )
+        return {"CsoId": str(cso_id), "ContactType": str(contact_type)}
+
+    async def search_cases(self, docket_number: str) -> list[dict[str, Any]]:
+        """Look cases up by docket number through the CaseSearch endpoint.
+
+        This reuses the stored token rather than fetching one, so it stays
+        free of the charge an IndexContent page may incur.
+
+        :param docket_number: The appellate docket number, e.g. ``26-7519``.
+        :return: The matching cases as the API returns them, each carrying
+            ``pcx_caseid``, ``pcx_casenumber`` and ``pcx_name``.
+        :raises PacerLoginException: if no token is stored for the court.
+        :raises ParsingException: if the API answers with something other
+            than a list of cases.
+        """
+        self._require_token()
+        path = self.CASE_SEARCH_ENDPOINT.format(docket_number=docket_number)
+        url = f"{self.base_url}{path}"
+        logger.info("Querying the CaseSearch endpoint with URL: %s", url)
+        response = await self.session.get(url, params={"exactMatch": True})
+        response.raise_for_status()
+        cases = response.json()
+        if not isinstance(cases, list):
+            raise ParsingException(
+                "Unexpected CaseSearch response; expected a list of cases."
+            )
+        return cases
+
+    async def get_case_details(self, case_id: str) -> dict[str, Any]:
         """
         Fetches and maps case details for a given case ID.
 
         :param case_id: The unique identifier of the case.
         :return: The mapped case details.
         """
+        self._require_token()
         path = self.CASE_DETAILS_ENDPOINT.format(case_id=case_id)
         url = f"{self.base_url}{path}"
-        logger.info(f"Fetching case details from: {url}")
-        response = self.session.get(url)
+        logger.info("Fetching case details from: %s", url)
+        response = await self.session.get(url)
         response.raise_for_status()
         return self._map_case_details_response(response.json())
 
-    def get_docket_entries(self, case_id: str) -> dict[str, Any]:
+    async def get_docket_entries(self, case_id: str) -> dict[str, Any]:
         """
         Fetches and maps docket entry details for a given case ID.
 
         :param case_id: The unique identifier of the case.
         :return: The mapped docket entry details.
         """
+        self._require_token()
+        user_data = self._user_data()
         path = self.DOCKET_ENTRIES_ENDPOINT.format(case_id=case_id)
         url = f"{self.base_url}{path}"
-        logger.info(f"Fetching docket entries from: {url}")
-        response = self.session.post(
+        logger.info("Fetching docket entries from: %s", url)
+        response = await self.session.post(
             url,
             json={
-                "csoId": self.session.acms_user_data["CsoId"],
-                "contactType": self.session.acms_user_data["ContactType"],
+                "csoId": user_data["CsoId"],
+                "contactType": user_data["ContactType"],
             },
         )
         response.raise_for_status()
         return self._map_docket_entries_response(response.json())
+
+    async def get_attachments(
+        self,
+        docket_entry_id: str,
+        is_case_participant: bool,
+        is_restricted_party_filing_entry: bool,
+    ) -> list[dict[str, Any]]:
+        """
+        Fetches and maps attachments for a specific docket entry.
+
+        :param docket_entry_id: The ID of the docket entry to retrieve
+                                attachments for.
+        :param is_case_participant: Indicates if the user is a participant in
+                                    the case.
+        :param is_restricted_party_filing_entry: Indicates if the docket entry is a
+                                                restricted party filing.
+        :return: A list of dictionaries, where each dictionary represents an
+                 attachment.
+        """
+        self._require_token()
+        path = self.ATTACHMENTS_ENDPOINT.format(entry_id=docket_entry_id)
+        url = f"{self.base_url}{path}"
+        logger.info("Fetching attachment from: %s", url)
+        response = await self.session.post(
+            url,
+            json={
+                "isUserCaseParticipant": is_case_participant,
+                "restrictedPartyFilingDocketEntry": is_restricted_party_filing_entry,
+            },
+        )
+        response.raise_for_status()
+        raw_attachments = response.json()
+        if not raw_attachments:
+            return []
+
+        return [
+            self._map_docket_entry_document(attachment)
+            for attachment in raw_attachments
+        ]
+
+    async def download_pdf(
+        self,
+        document_id: str,
+        page_count: int,
+        document_url: str,
+        max_attempts: int = 90,
+        poll_interval: float = 1.0,
+    ):
+        """
+        Requests generation and download of a merged PDF from the remote API.
+
+        This method sends a request to merge a document, polls the status
+        of the operation until it is completed, and then retrieves the PDF file
+        from the API.
+
+        :param document_id: identifier of the document in the ACMS system.
+        :param page_count: number of pages in the document.
+        :param document_url: The URL where the source document can be accessed.
+        :param max_attempts: Maximum number of polling attempts before timing out.
+        :param poll_interval: Seconds to wait between polling attempts.
+        :return: The HTTP response containing the merged PDF file.
+        """
+        self._require_token()
+        # API endpoints for merge and retrieval
+        merge_pdf_path = f"{self.base_url}{self.MERGE_PDF_ENDPOINT}"
+        get_pdf_path = f"{self.base_url}{self.GET_PDF_ENDPOINT}"
+
+        # Request body specifying the document to merge
+        body = {
+            "header": True,
+            "mergeScope": "External",
+            "pagination": False,
+            "docketEntryDocuments": [
+                {
+                    "acms_docketdocumentdetailsid": document_id,
+                    "acms_documenturl": document_url,
+                    "acms_pagecount": page_count,
+                }
+            ],
+        }
+        # Step 1: Request PDF merge operation
+        response = await self.session.post(merge_pdf_path, json=body)
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract URL to check merge job status
+        status_url = data["statusQueryGetUri"]
+
+        # Step 2: Poll until the merge job is completed or timeout
+        for _ in range(max_attempts):
+            response = await self.session.get(status_url)
+            response.raise_for_status()
+            data = response.json()
+            status = data["runtimeStatus"].lower()
+
+            if status == "completed":
+                pdf_id = data["output"]
+                break
+
+            await asyncio.sleep(poll_interval)
+        else:
+            # If loop completes without break
+            raise TimeoutError(
+                f"Merge job did not complete after {max_attempts} attempts."
+            )
+
+        # Step 3: Retrieve the merged PDF by its file ID
+        response = await self.session.get(f"{get_pdf_path}?fileGuid={pdf_id}")
+        response.raise_for_status()
+        return response

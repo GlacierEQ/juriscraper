@@ -8,7 +8,9 @@ History:
 
 import re
 from datetime import date
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
+
+from typing_extensions import override
 
 from juriscraper.lib.string_utils import titlecase
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
@@ -16,6 +18,7 @@ from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 class Site(OpinionSiteLinear):
     days_interval = 7
+    use_urllib = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -23,14 +26,18 @@ class Site(OpinionSiteLinear):
         self.url = "https://www.nccourts.gov/documents/business-court-opinions"
         self.first_opinion_date = date(1996, 10, 24)
         self.make_backscrape_iterable(kwargs)
+        self.should_have_results = True
+        self.needs_special_headers = True
+        self.request["headers"] = {"User-Agent": self.chrome_user_agent}
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         for row in self.html.xpath(
             ".//div[contains(@class,'list__items')]/article"
         ):
             # Extract case name and citation
             case_string = (
-                row.xpath(".//h5[contains(@class,'list__title')]/a")[0]
+                row.xpath(".//*[contains(@class,'list__title')]/a")[0]
                 .text_content()
                 .strip()
             )
@@ -59,8 +66,9 @@ class Site(OpinionSiteLinear):
 
                 if len(parts) > 0:
                     lower_court_parts = parts[0].strip().split(",")
-                    for court in lower_court_parts:
-                        lower_courts.append(f"{court} County Court")
+                    lower_courts.extend(
+                        f"{court} County Court" for court in lower_court_parts
+                    )
 
                 if len(parts) > 1:
                     author_str = parts[1].strip()
@@ -74,7 +82,7 @@ class Site(OpinionSiteLinear):
                 {
                     "name": titlecase(case_name),
                     "docket": docket_number,
-                    "url": download_url,
+                    "url": urljoin(self.url, download_url),
                     "date": date_filed,
                     "citation": citation,
                     "status": status,
@@ -104,7 +112,7 @@ class Site(OpinionSiteLinear):
 
         return case_name, citation
 
-    def _download_backwards(self, dates: tuple[date, date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Build URL with year input and scrape
 
         :param dates: (start_date, end_date) tuple
@@ -115,5 +123,5 @@ class Site(OpinionSiteLinear):
             "field_publish_date_value_1": dates[1].strftime("%m/%d/%Y"),
         }
         self.url = f"{self.url}?{urlencode(params)}"
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

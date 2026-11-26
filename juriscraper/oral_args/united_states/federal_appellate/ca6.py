@@ -13,6 +13,8 @@ History:
 import re
 from datetime import date, datetime
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
 from juriscraper.OralArgumentSiteLinear import OralArgumentSiteLinear
 
@@ -32,6 +34,7 @@ class Site(OralArgumentSiteLinear):
         )
         self.make_backscrape_iterable(kwargs)
 
+    @override
     def _process_html(self) -> None:
         """All parsable fields are contained in the URL
 
@@ -56,7 +59,7 @@ class Site(OralArgumentSiteLinear):
                 }
             )
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Downloads and parses older records according to input dates"""
         logger.info("Backscraping for range %s", *dates)
         self.limit = 10000  # disable limit
@@ -69,5 +72,5 @@ class Site(OralArgumentSiteLinear):
             "dateTo": dates[1].strftime("%m/%d/%y"),
             "Submit": "Submit+Query",
         }
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from urllib.parse import urlencode
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
@@ -16,8 +18,10 @@ class Site(OpinionSiteLinear):
         self.court_id = self.__module__
         self.url = self.base_url
         self.make_backscrape_iterable(kwargs)
+        self.should_have_results = True
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         for row in self.html.xpath("//tr[not(th)]"):
             title = row.xpath("td[2]/a/text()")[0]
             url = row.xpath("td[2]/a/@href")[0]
@@ -54,7 +58,7 @@ class Site(OpinionSiteLinear):
             status = "Unknown"
         return status
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Change URL to backscraping date range
 
         :param dates: tuple with date range to scrape
@@ -68,5 +72,5 @@ class Site(OpinionSiteLinear):
             "field_opn_issdate_value[max][date]": end.strftime("%m/%d/%Y"),
         }
         self.url = f"{self.base_url}?{urlencode(params)}"
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

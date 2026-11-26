@@ -3,10 +3,12 @@
 # Date updated: 2020-02-25
 
 import re
-from typing import Union
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.exceptions import InvalidDocumentError
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -20,9 +22,11 @@ class Site(OpinionSiteLinear):
         super().__init__(*args, **kwargs)
         self.court_id = self.__module__
         self.url = f"{self.base_url}/getDailyOrders"
-        self.expected_content_types = None
+        self.expected_content_types = []
+        self.should_have_results = True
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         for row in self.html:
             description = row["documentDescription"]
             if not description.startswith("Opinion"):
@@ -74,19 +78,52 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def extract_from_text(self, scraped_text: str) -> dict:
-        """Extract citation from text
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract citation, and OriginatingCourtInformation from text
 
         :param scraped_text: Text of scraped content
         :return: date filed
         """
+        result: ExtractedMetaData = {}
         first_text = scraped_text[:400]
         if match := re.search(self.cite_regex, first_text):
-            return {"Citation": match.group(0)}
-        return {}
+            result["Citation"] = match.group(0)
+
+        lower_court_pattern = re.compile(
+            r"""
+                APPEAL\s+FROM:\s+
+                (?P<lower_court>.*?)(?:,\s+Cause)
+                (?:.*?No\.\s+(?P<lower_court_docket>[^\n,]+))?
+                (?:.*?Honorable\s+(?P<judge>.+?),\s*Presiding\s*Judge)?
+            """,
+            re.X | re.DOTALL,
+        )
+
+        if match := lower_court_pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            result.setdefault("Docket", {})["appeal_from_str"] = lower_court
+            lower_court_judge = match.group("judge")
+            if lower_court_judge:
+                result.setdefault("OriginatingCourtInformation", {})[
+                    "assigned_to_str"
+                ] = lower_court_judge
+            lower_court_docket = match.group("lower_court_docket")
+            if lower_court_docket:
+                result.setdefault("OriginatingCourtInformation", {})[
+                    "docket_number"
+                ] = lower_court_docket
+
+        docket_number_pattern = re.compile(r"(DA|OP)\s[0-9]{2}-[0-9]{4}")
+        if match := docket_number_pattern.search(scraped_text):
+            result.setdefault("Docket", {})["docket_number"] = match.group(0)
+
+        return result
 
     @staticmethod
-    def cleanup_content(content: Union[str, bytes]) -> str:
+    def cleanup_content(content: str | bytes) -> str:
         """Raise an error if the content is invalid; otherwise just return it
 
         Not cleaning up in the common sense; but avoids ingesting error
@@ -105,9 +142,9 @@ class Site(OpinionSiteLinear):
         :param content: the downloaded content; maybe a string or PDF bytes
         :return: the downloaded content, unchanged
         """
-        if (
-            isinstance(content, str)
-            and "No document found with CTrack ID" in content[:1000]
+        if isinstance(content, str) and (
+            "No document found with CTrack ID" in content[:1000]
+            or "Your support ID is" in content[:1000]
         ):
             raise InvalidDocumentError(content)
 

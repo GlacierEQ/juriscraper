@@ -15,45 +15,1282 @@ Releases are also tagged in git, if that's helpful.
 The following changes are not yet released, but are code complete:
 
 Features:
+- Add `AcmsApiClient.get_index_content()`, which loads an ACMS case's
+  IndexContent page and keeps the API bearer token it carries, since ACMS
+  no longer returns one during login. `ACMSDocketReport.query_by_docket_number()`
+  builds on it to look a case up by docket number and load its docket,
+  taking entries from the page when present and from the API otherwise.
+  freelawproject/courtlistener#6680
+
+Changes:
+-
+
+Fixes:
+- Incorrectly applied ternary in leading to blank URL in "Possible case numbers" API
+- Correct type annotation for `ACMSAttachmentPageData.entry_number`
+- `AcmsApiClient` raises `PacerLoginException` when an API call is made
+  before a token or account data is stored, instead of sending an
+  anonymous request or crashing with `KeyError`. `AcmsCaseSearch` now
+  sends its request through the new `AcmsApiClient.search_cases()`, so it
+  raises the same exception instead of an `HTTPStatusError`.
+  freelawproject/courtlistener#6680
+- Fix `nytrial` docket number extraction for some PDFs. #2273
+
+## 4.0.5 - 2026-11-23
+
+Features:
+- Add a backscraper to `neb` and `nebctapp`. It reads the Nebraska Appellate
+  Courts Online Library volume listings, which cover 275 Neb. (2008) and
+  16 Neb. App. (2007) onwards. `extract_from_text` now returns the N.W.2d /
+  N.W.3d parallel citation when the certified opinion has one, and the
+  numbered headnotes as `OpinionCluster.headnotes`.
+  freelawproject/courtlistener#8501
+
+Changes:
+- CI: Publish to PyPI with trusted publishing instead of an API token.
+- Adopt tagged dictionary approach for `TexasCourt*Docket` and `TexasOriginating*Court`.
+- Adopt `StrEnum` for enumerations in `state.texas`.
+- Structure return type of `*AttachmentPage.data()`.
+
+Fixes:
+-
+
+## 4.0.4 - 2026-11-18
+
+Features:
+-
+
+Changes:
+- `SCOTUSDocketReport*` interfaces are stripped down. The methods `normalize_date()` and `clean_lower_court_cases()` have been removed to a private helper module.
+- `SCOTUSDocketReport*` hierarchy is flattened. Each implementation is now an immediate subclass of `SCOTUSDocketReportBase`. What was `SCOTUSDocketReport` is renamed to `SCOTUSDocketReportJSON`; an alias from `SCOTUSDocketReport` to `SCOTUSDocketReportJSON` is established for compatibility.
+- `CaseQueryAdvanced.query()`, `ClaimsRegister.query()`, `DocketHistoryReport.query()`, `DocketReport.query()`, `ShowCaseDocApi.query()`, `FreeOpinionReport.query()` and `AppellateDocketReport.query()` parameters are annotated.
+- Upgrade Pyrefly to v1.4.0
+- `SCOTUSDocketReport*` return values are structured; failure cases yield a `dict[Never, Never]`.
+
+Fixes:
+-
+
+## 4.0.3 - 2026-11-13
+
+Features:
+- Add `nev_u` and `nevapp_u` scrapers for unpublished dispositions of the
+  Nevada Supreme Court and Court of Appeals #2011
+- Add the Arkansas Attorney General opinions scraper (`arkag`) with publication-date interval backscraping and signer extraction. #2353
+- Add backscrapers to `mspb_p` and `mspb_u`. They read MSPB's full
+  decision manifests: 16,816 precedential decisions from 1979 and 10,802
+  nonprecedential decisions from 2007 (as of 2026-11-01). Manifests
+  outside the requested date range are not downloaded. #2386
+- `mspb_p` and `mspb_u` return the M.S.P.R. citation as
+  `parallel_citation` (or as `citation` when there is no decision
+  number), with citations normalized so eyecite can parse them, e.g.
+  `9 M S P B  448` to `9 M.S.P.B. 448`. #2386
+
+Changes:
+- Rename the `calctapp_*` district scrapers to the CourtListener court ids
+  of their districts and divisions, e.g. `calctapp_1st` to `calctapp1d` and
+  `calctapp_4th_div1` to `calctapp4d1` #2375
+- Replace `calctapp_u` with one unpublished scraper per district and
+  division, e.g. `calctapp1d_u` and `calctapp4d1_u`, so unpublished
+  opinions go to the same court as published ones #2375
+- Add a GitHub issue template for new scraper requests #2392
+- Structure return type of `NotificationEmail.data()` and `S3NotificationEmail.data()`.
+- The return type of `OpinionSite.extract_from_text()` is given a rudimentary structure, `ExtractedMetaData`.
+- Annotate all implementations of `_parse_text()` in `pacer`.
+- Scrapers in `texas` return an empty `dict[Never, Never]` instead of an empty `dict[str, None]` in failure cases.
+
+Fixes:
+- `mspb_p` and `mspb_u` read the manifests MSPB's own listing pages load
+  instead of the `_Table.json` files, which stopped updating in
+  September 2026. `mspb_u` no longer builds URLs with a double slash. #2386
+- `txctapp5`, `txctapp8`, `txctapp12` and `txctapp14` get opinions from the
+  Released Orders/Opinions pages. The Document Search returns no opinions
+  for these courts. #2396
+
+## 4.0.2 - 2026-10-29
+
+Features:
+-
+
+Changes:
+- Document how to sign the CLA online via CLA Assistant in `CONTRIBUTING.md`. #2369
+- Move the six attorney general scrapers (`calag`, `mdag`, `minnag`, `nyag`,
+  `oklaag`, `texag`) from `opinions.united_states.state` into a new
+  `opinions.united_states.attorney_general` package. Court IDs are unchanged,
+  but crawls invoked with the `state` package path must add the
+  `attorney_general` package path to keep covering them. #168
+
+Fixes:
+- Fix `tenn`, `tennctapp`, `tenncrimapp` and `tenn_workers_comp` crash when a row's opinion link has an empty URL; those rows are now skipped. #2303
+- Fix `arizctapp_div_2` returning zero items after the court redesigned its recent opinions page. #2367
+- Fix `ariz` and `arizctapp_div_1` 404s by sending the `pageSize` parameter the opinions API now requires. #2357
+- Send the session's default headers, including `User-Agent`, on PACER magic link downloads; PACER was intermittently resetting the connection without them.
+- Fix SCOTUS email parser failing on double quotes in docket entry titles
+- Fix `ga`: read the release date from the `<h3>` heading the 2026 opinions page now uses; opinions since 2026-06-30 were all dated 2026-06-16 and dropped #2287
+- Fix `ala`: accept every document type that contains "Opinion" or "Decision", such as "Published Opinion"; the exact-match filter dropped them (also `alacivapp`, `alacrimapp`) #2287
+
+## 4.0.1 - 2026-10-15
+
+Features:
+- Drop Python 3.10 and add Python 3.15 support
+- Add a backscraper to `nmariana`. #1946
+
+Changes:
+- Define the type of the `court_id` parameter to `pacer` report initializers (type `str`).
+
+Fixes:
+- Coerce non-string multipart form values to str and omit `None` values in
+  `PacerSession` so httpx can encode them #2301
+- Fix `nmariana` judge names and authors parsed from the panel. #1946
+- Fix `nmariana` per curiam: set it from the opinion's "PER CURIAM" heading, not from a missing "*" author. #1946
+- Fix `nmariana` docket numbers: take them with their label from the opinion header, not the e-filing stamp, and leave them out when not found. #1946
+
+## 4.0.0 - 2026-10-12
+
+Features:
+-
+
+Changes:
+- **Breaking:** Migrate HTTP client from `requests` to `httpx` `AsyncClient`;
+  remaining sync calls are now async. `requests` and `tldextract` are no
+  longer dependencies. #739
+- `PacerSession` now authenticates ACMS requests with per-court cookie sessions
+  instead of a bearer token, restoring ACMS auth after their HTMX refactor.
+  freelawproject/courtlistener#5921
+
+Fixes:
+- Fix `or`, `orctapp` and `ortc` crash when the search API leaves out a field; rows with no docket or date are now skipped.
+- `harmonize()` no longer removes "et al" from inside longer words in case names, such as "Mat Et Aliasing" #202
+- Fix `scotus_slip`: return an empty citation for "volume/part" values such as "609/2". #2166
+- `nev`/`nevapp`: resolve panel judge initials to full names, and keep the full panel when it has a "Before:" prefix or spaced slashes #2049
+- Fix `nev`/`nevapp` backscrape crash on the empty page after the last one
+- Fix `fla` and `fladistctapp_*` crash when a search result has no opinion file; those rows are now skipped instead of stopping the whole page. #2274 #2286
+
+## 3.0.44 - 2026-09-30
+
+Features:
 -
 
 Changes:
 -
 
 Fixes:
-- Fix `ariz` update download URLs #1474
+- Strip the "(PDF)" suffix from `nytrial` case names of rows that link directly to a PDF. #2243
+
+## 3.0.43 - 2026-09-29
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+-
+
+## 3.0.42 - 2026-09-29
+
+Features:
+-
+
+Changes:
+- Add `AbstractSite.chrome_user_agent` / `chrome_sec_ch_ua`, built from a single `chrome_version` attribute, and use them in every scraper that spoofs a browser User-Agent, so stale-version blocks are a one-line fix. #2132
+- Correct contributor and install docs that were out of date with the repo: required Python is 3.10+, scraper templates live on `main`, the sample caller example now points at `ca1`, and the leftover nosetests debugger instructions are replaced with tox/pytest. #749
+- Delete the unused selenium machinery: `WebDriven` classes, `uses_selenium` attribute and the `selenium` dependency. Fixes #2141
+- Adopt strict type checks in `lib`, `scotus`, `state`.
+- Adopt comprehensive checking in `pacer`.
+- Upgrade Pyrefly to v1.3.1
+- Refactor `lactapp_5` to scrape the latest decisions window. #1390
+- Upgrade GitHub Actions (and also pin versions).
+- Improve typing in `pacer` with `@overload`.
+
+Fixes:
+- Fix `nytrial` scrapers and `nysupct_commercial`: use the new `current/index` pages, parse the new opinion template, raise on the "404 ERROR" page, get the judge and docket number of "30000"-type decisions from their stub pages, parse NYSCEF stamp and caption docket numbers from PDFs, and the Misc3d citation and full case name of corrected, officially reported opinions. #2243, #2242
+- Fix TAMES (Texas). Remove WAF poison string.
+- Replace indirect `urllib3` imports (via `requests.packages.urllib3`) with direct imports.
+- Correct type annotations in `alaska`, `bap9`, `cafc`, `idaho_civil`, `miss`, `texapp`, and `wyo`.
+- Correct type annotations in `lib`, `pacer`, `scotus` and `state`. All internal, but for `SCOTUSEmailData.email_datetime`, which could be none but was not marked as optional. #2210
+- Corrections to docstrings across files.
+- Fix `nmariana` scraper selectors and switch to `use_urllib=True` due to Cloudflare. #2202
+- Add generics and test utility functions in `lib`.
+- Take consistent approach to unparsed data in `state` and `scotus`.
+- Correct more type annotations in `pacer`
+- Fix inheritance in the `TexasCommonScraper` cluster.
+- Fix handling of meta redirects with url-relative destinations
+- Address `no-any-return-*` in `lib.html_utils`.
+- Fix "no changes" label handling for `CHANGES.md`
+
+## 3.0.41 - 2026-09-14
+
+Features:
+-
+
+Changes:
+- Improve type of `Deserializable.deserialize()` to conserve the subject type.
+- Introduce Phyrefly static type checking configuration for all files outside of tests.
+
+Fixes:
+- Accept `audio/mp3` content type for ca9 scraper. #2168
+- Fix `bap1` backscraper: fixed a missing `await` that made it return zero results. #2136
+- Fix `mich` backscraper: fixed a missing `await` that made it return zero results. #2136
+- Fix `michctapp` backscraper: fixed a missing `await` that would lead to cases getting the title "Placeholder name".
+- Fix `fla` (and the inheriting `fladistctapp_*` scrapers) now paginate the search results. #2150
+- Fix `ariz` (and the inheriting `arizctapp_div_1` scraper) now accept Word documents, which the court publishes for some decisions. #2167
+
+## 3.0.40 - 2026-08-19
+
+Features:
+- NYCoA enums
+
+Changes:
+-
+
+Fixes:
+-
+
+## 3.0.39 - 2026-08-18
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+- `fladistctapp` scrapers no longer crash when the source JSON returns null
+  for `note` or `disposition`. #2112
+
+## 3.0.38 - 2026-08-14
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+- Fix `miss` and `missctapp`, blocked by the source's WAF (#2129)
+- Fix `bia` and `olc` implementations of `download_content()`
+
+## 3.0.37 - 2026-08-13
+
+Features:
+-
+
+Changes:
+- Add a PR template with an AI Disclosure section.
+
+Fixes:
+- `titlecase()` no longer corrupts ordinary Mac- words ("Machine" →
+  "MacHine", "Mack" → "MacK", "Macon" → "MacOn"): the surname rule now
+  applies only to Mc- words, matching python-titlecase's fix for the same
+  bug. Affected example fixtures regenerated. Fixes #2048.
+- Make Tames search more resilient against injected Bar numbers.
+- Fix `pa` backscraper: fixed a missing `await` that made them return zero results. #1860
+- Fix `sd` backscraper: fixed a missing `await` that made pagination recurse until `RecursionError`. #1860
+- Add sorting to FL paginated case detail endpoints (matching the values on the ACIS site) to prevent unstable results.
+
+## 3.0.36 - 2026-08-07
+
+Features:
+- Allow deserializing output of `model_dump_json` for Florida models.
+
+Changes:
+-
+
+Fixes:
+- `ca9` oral arguments: query and order the `media` table by the court's upload timestamp instead of the hearing date, so arguments uploaded late in the day, or long after the hearing, are no longer hidden behind items already in CourtListener. #2111
+
+## 3.0.35 - 2026-08-06
+
+Features:
+-
+
+Changes:
+- `ca5` opinions: scrape the court's opinion browser instead of the RSS feed, which adds `--backscrape` support and replaces the now deleted `united_states_backscrapers.federal_appellate.ca5` module. #2062
+- `ca5` oral arguments: ported to `OralArgumentSiteLinear`; now collects attorneys. #2062
+
+Fixes:
+- `ca5` opinion and oral argument scrapers: fixed for the court's website redesign. #2062
+- `titlecase()` no longer corrupts ordinary Mac- words. #2048
+
+## 3.0.34 - 2026-07-30
+
+Features:
+- `FreeOpinionReport`: expose a `reported_opinion_count` property with PACER's
+  own "Total number of opinions reported" total (summed across queried pages).
+  It's independent of `len(report.data)`, so comparing the two surfaces silent
+  parse gaps (e.g. PACER reports 52 opinions but only 12 rows parse).
+
+Changes:
+-
+
+Fixes:
+- `ny.Site.cleanup_content` extracts only the opinion container from the new LRB page template, so site chrome ("disable Adblock" banner, header menus, footer) no longer pollutes opinion content. Covers all NY scrapers. #2058
+
+## 3.0.33 - 2026-07-21
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+- Fix `asbca` and `uscgcoca` headers (Chrome 149) #2043
+- Fix `indctapp_reclassified` crash on rows with `<span>`-wrapped cells; also fixes case names being truncated at `<br>` tags #2050
+
+## 3.0.32 - 2026-07-14
+
+Features:
+- Add new scraper `superctguam` for Superior Court of Guam [#1939](https://github.com/freelawproject/juriscraper/issues/1939)
+
+Changes:
+- `guam`: move legacy `get_items` type to a class attribute for subclass reuse. Did this for `superctguam`
+
+Fixes:
+
+- Fix Ohio scrapers by making `__EVENTVALIDATION` optional #2032
+- Rewrite the `ca3` oral argument scraper for the court's new HTML file
+  lists, which replaced the removed RSS feed and .aspx pages #2019
+- Fix `tex` date extraction after the court's orders-page layout change,
+  and classify "Statement of Justice" documents as concurrences #2020
+
+## 3.0.31 - 2026-07-09
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- SCOTUS email docket entry title extraction failure on line breaks in title.
+- Minor Florida parsing issues found during scraper run
+
+## 3.0.30 - 2026-06-29
+
+Features:
+-
+
+Changes:
+
+- Map "Unknown court" from Florida ACIS to `FloridaCourtID.UNKNOWN`
+- Downgrade unrecognized court name log from error to warning
+
+Fixes:
+
+- Remove `miwb` from free documents excluded courts #2029
+
+## 3.0.29 - 2026-06-26
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- `Retry` request handler preventing other handlers from awaiting responses
+- Use make_case_name_short for Florida’s case_name_short field
+
+## 3.0.28 - 2026-06-25
+
+Features:
+
+- Add Florida scraper
+
+Changes:
+
+- `alaska` and `alaskactapp`: migrated to the Westlaw-hosted "Alaska Case Law
+  Service" (https://govt.westlaw.com/akcases), where the court now publishes
+  its opinions. Both courts share one search feed and are split by court label.
+  Precedential status is parsed per opinion. Retired the `alaska_slip` and
+  `alaska_u` scrapers, whose document-type distinctions the new source does not
+  expose; their opinions are now covered by `alaska`/`alaskactapp` #2009
+
+Fixes:
+
+- `nev`/`nevapp`: Nevada's appellate courts moved off their self-hosted C-Track CMS onto Thomson Reuters' cloud "ACIS"
+  portal (`acis.nvcourts.gov`) around June 10, breaking the old `AdvanceOpinions` API. Reworked both scrapers to use the
+  new portal's document-search API, parsing the citation, disposition, author/per curiam and panel out of each docket
+  entry, and building the opinion PDF link directly from the response. Case names are cleaned (case-type parentheticals
+  like "(CIVIL)" dropped, party parentheticals kept) and consolidated "C/W" dockets are appended to the docket number.
+  Adds a paginated backscraper #2010
+
+## 3.0.26 - 2026-06-17
+
+Fixes:
+
+- `guam`: scrape current-year opinions from the new page; the legacy endpoint stopped getting updated mid-year and
+  missed the newest opinions. Backscraping still uses the legacy endpoint for 2025 and prior #2004
+- `minn`/`minnctapp_p`/`minnctapp_u`: mn.gov is fronted by Radware Bot Manager, which served a captcha page when the
+  back-to-back scrapers tripped its rate limit. The captcha page has no results, so opinions were silently dropped (
+  `minnctapp` stuck since April 7). Now adds a pre-request delay to respect the site's rate limit, only scrapes within
+  the `Visit-time: 0000-1200` GMT window allowed by robots.txt (aborts the run otherwise), and raises
+  `BotChallengeError` if a captcha page is still served instead of failing silently. Also, scrapers are no longer listed
+  one after the other in `state.__init__.__all__` which will make them execute separately #2006
+
+## 3.0.25 - 2026-06-15
+
+Fixes:
+
+- `ca2` update HTML parsers since the site changed again #2001
+
+## 3.0.24 - 2026-06-10
+
+Changes:
+
+- `dc` now collects the authoring judge, disposition, and per curiam status #1134
+
+Fixes:
+
+- `dc` now uses a browser user agent. It was failing with 403 Forbidden #1996
+- `bia`: assign a descending approximate `date_filed` (one day apart per row, starting from the middle of the year) so
+  records preserve the source's date-descending order. Previously every record shared the same approximate date, so CL
+  ordered them by case name and its DupChecker could stop before reaching newer opinions. #1934
+- `miss`: fix an invalid UTF-8 byte in the example file and normalize its line endings to LF
+
+## 3.0.23 - 2026-06-08
+
+Fixes:
+
+- `texbizct` was crashing on every run: the site's WAF blocks the per-document
+  HEAD requests that were used to approximate `date_filed` from the
+  `Last-Modified` header. The source now publishes a byline per opinion
+  ("Whitehill, J. | June 3, 2026"), so drop the HEAD requests and parse the
+  exact date and the authoring judge from the byline instead. Also fix the
+  summary xpath, which was concatenating the summaries of all following
+  cases. #1992
+- `ca2_p` and `ca2_u` were silently returning zero results since 2026-05-04:
+  the dtSearch results page now wraps the Caption value in an anchor instead
+  of plain text, so every row was skipped as incomplete. The label parser now
+  falls back to the anchor's text when the label has no plain-text value.
+  Oral arguments (`ca2`) share the parser but were unaffected. #1991
+
+## 3.0.22 - 2026-06-04
+
+Fixes:
+
+- `la` (Louisiana Supreme Court) was failing because lasc.org was rebuilt as a
+  Blazor Server app: a plain GET returns only the JavaScript shell with no
+  opinions, and the legacy http:// host now returns 521. The scraper now reads
+  the RSS feed for recent Opinions sub-pages and drives the Blazor SignalR
+  circuit to retrieve the server-rendered news release. #1983
+- `ca9` oral argument audio URLs now point to `cdn.ca9.uscourts.gov`; the old
+  `www` host started returning 404 pages after the site redesign (#1987)
+- `uscfc` was crashing ingestion because some opinions (attorney discipline
+  orders) now have relative download links. Resolve them with `urljoin` #1986
+
+## 3.0.21 - 2026-05-29
+
+Fixes:
+
+- `ny.Site.cleanup_content` wraps output in an html document envelope so
+  doctor doesn't misclassify cleaned pages as `text/plain`. #1971
+- Skip the  `should_have_results`  error during historical backscrapes #1886
+- Updated `ca9_p` and `ca9_u` opinion feed URLs (#1976)
+- `ariz` was failing with a 401 from the opinions API: a new DNN module was
+  added to the search page, so the positional ModuleId xpath picked the wrong
+  module. Target the opinions module by its `DnnModule-AzcourtsOpinions` class
+  instead. #1978
+
+## 3.0.20 - 2026-05-21
+
+Fixes:
+
+- New Jersey opinion scrapers (`nj`, `njsuperctappdiv_p`, `njsuperctappdiv_u`,
+  `njtaxct_p`, `njtaxct_u`) were 403'd by the Imperva WAF on njcourts.gov.
+  Set a browser User-Agent and `needs_special_headers = True` so both the
+  index pages and the opinion PDFs download. #1965
+- Add a sleep to fullfil Oregon courts required crawl delay #1968
+
+## 3.0.19 - 2026-05-19
+
+Changes:
+
+- Drop Python 3.9 support
+- Add Python 3.14 support
+
+Fixes:
+
+- visuper: migrated to new public portal API; merged visuper_p and visuper_u #1945
+- `guam` opinions scraper now fetches from the new `legacydata/supreme-court-opinions` AJAX endpoint. The old
+  `Supreme-Court-Opinions/Supreme-Court-Opinions.asp` page returns 404. #1938
+- Supreme court update email docket number extraction broken if docket link was not the first.
+- Fix `tex` html parsing and disposition extraction. #1962
+
+## 3.0.18 - 2026-05-06
+
+Features:
+
+- Add parsers for Florida court API endpoints.
+
+Fixes:
+
+- Fix `idaho` scrapers expected_content_types attribute #1949
+
+## 3.0.17 - 2026-05-06
+
+Fixes:
+
+- Fix `nmariana` neutral citations to use spaces instead of dashes (e.g. `2022 MP 09` instead of `2022-MP-09`) so
+  eyecite/reporters-db can parse them. #1947
+- Fix `idaho` scrapers expected_content_types attribute and reduce regular scrape page_size #1949
+
+## 3.0.16 - 2026-05-04
+
+Fixes:
+
+- SCOTUS email type detection
+
+## 3.0.15 - 2026-04-30
+
+Features:
+
+- New `idahoctapp_u_per_curiam` scraper for the Idaho Court of Appeals "Unpublished Per Curiam" category (sets
+  `per_curiam=True`). #1914
+
+Changes:
+
+- Rewrite all Idaho opinion scrapers (`idaho_civil`, `idaho_criminal`, `idahoctapp_civil`, `idahoctapp_criminal`,
+  `idahoctapp_u`) for the new `isc.idaho.gov` SPA backed by a JSON API. The old `www.isc.idaho.gov/appeals-court/...`
+  URLs no longer resolve. #1914
+
+Fixes:
+-
+
+## 3.0.14 - 2026-04-30
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `alaska` (and inheriting `alaskactapp`, `alaska_slip`, `alaska_u`) scrapers failing with HTTP 400 "Invalid Header"
+  and `RemoteProtocolError`. Switch to `use_urllib = True` to handle the proxy's duplicate `Transfer-Encoding` headers,
+  and fix duplicate `User-Agent` header that the server rejected. #1932
+
+## 3.0.13 - 2026-04-29
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Switch `conn` and `connappct` to HTTPS; the source no longer accepts plain HTTP, causing `ConnectTimeout` #1924
+- Fix `ncbizct` scraper failing with `IndexError`, HTML had changed #1928
+- Fix `ca2` oral argument scraper after site search migrated to the dtSearch endpoint #1926
+- Fix `ny` (and inheriting NY scrapers) to treat the "No results found." placeholder row as a normal empty result
+  instead of logging an error per row
+
+## 3.0.12 - 2026-04-27
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `asbca` URL pattern after site migration #1921
+- Fix `ca2_p` and `ca2_u` scrapers after site search migrated to a new endpoint #1919.
+
+## 3.0.11 - 2026-04-17
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Ignore "Vide" field when parsing SCOTUS HTM dockets
+- Fix `ncbizct` cloudfront block using `use_urllib` #1916
+
+## 3.0.10 - 2026-04-14
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `wva` and `wvactapp` scrapers pointing to archived prior-terms URL instead of current opinions page. Add
+  backscraper support. Fixes #1907.
+
+## 3.0.9 - 2026-04-10
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `miss` and `missctapp` scrapers: migrate to new `getHanddown.php` API, handle new table HTML layout, normalize PDF
+  URLs, add backscraper support (#1765)
+
+## 3.0.8 - 2026-04-09
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `ny` update all NY scrapers for redesigned court website #1864
+
+## 3.0.7 - 2026-04-06
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix SCOTUS parsing issues identified in [#1848](https://github.com/freelawproject/juriscraper/issues/1848).
+- Expand permissable TAMES docket numbers
+- More gracefully handle empty event tables in Tames
+- Improved TAMES Download URL escaping
+
+## 3.0.6 - 2026-04-02
+
+Features:
+-
+
+Changes:
+
+- Split `kan` and `kanctapp` scrapers by status into `kan_p`, `kan_u`, `kanctapp_p`, `kanctapp_u` (#1262)
+
+Fixes:
+-
+
+## 3.0.5 - 2026-03-27
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `ca9` oral argument scraper to paginate DynamoDB scans #1877
+
+## 3.0.4 - 2026-03-26
+
+Features:
+-
+
+Changes:
+
+- Abstract validation functions out of `AbstractSite.download_content` into reusable utils #1882
+- Abstract urllib `download_content` into `AbstractSite` for scrapers with `use_urllib = True` #1714
+
+Fixes:
+
+- Fix `masssuperct` by switching from JSON API to HTML scraping with urllib to bypass Cloudflare TLS fingerprinting
+  #1714
+- Fix `lactapp_3` opinion download by using urllib instead of httpx to bypass Cloudflare TLS fingerprinting #1882
+- Fix `mich` scraper failing when API returns null courts #1885
+
+## 3.0.3 - 2026-03-25
+
+Features:
+
+- Add Trademark Trial and Appeal Board scraper #1851
+
+Changes:
+-
+
+Fixes:
+
+- Fix `nd` scraper crashing on rows without a 'View Opinion' button #1872
+- Fix `nm` slip opinions incorrectly marked as "Unpublished" #1874
+
+## 3.0.2 - 2026-03-20
+
+Features:
+
+- Implements `kan` and `kanctapp` backscraper #1316
+- Implements `lactapp_3` using urllib #1455
+- Abstract `urllib` implementation #1455
+
+Changes:
+
+- `kan` back to OpinionSiteLinear
+
+Fixes:
+
+- Fixes `kan` and `kanctapp` by using urllib requests #1316
+- Fixes the sample caller to download documents
+- Fixed the `nh_p` and `nh_u` scrapers #1663
+
+## 3.0.1 - 2026-03-18
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Added missing `await` to `la`, `iowactapp` and `miss` scrapers #1860
+- Catch correct `httpx.TimeoutException` in `get_extension` #1860
+
+## 3.0.0 - 2026-03-18
+
+Features:
+-
+
+Changes:
+
+- Migrate from `requests` to `httpx.AsyncClient` for AbstractSite children scrapers HTTP workflows #1843
+- Migrate scraper sync call paths to async #1843
+
+Fixes:
+-
+
+## 2.8.4 - 2026-03-17
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `texapp` skip cases with no opinion documents to prevent empty sub_opinions #1852
+- Fix `pa` UNANIMOUS opinions not setting `per_curiam=True`, causing InsanityException #1854
+
+## 2.8.3 - 2026-03-13
+
+Features:
+
+- Add backscraping support to `mich` and `michctapp` going #1806
+- Add parsing for Texas email notifications.
+- Add Claude Code skill for automating version releases #1826
+
+Changes:
+
+- Raise an exception during parsing for Texas docket numbers we know to be bad data
+- Update Texas docket number validation to handle all 6,401 valid cases that were failing
+
+Fixes:
+
+- Fix `sc`, `sc_u`, `scctapp`, `scctapp_u` update XPath selectors for redesigned SC courts website
+- Map unmapped PA opinion types and disable `logger.error` #1847
+
+## 2.8.2 - 2026-03-02
+
+Features:
+-
+
+Changes:
+
+- OpinionSite can now return a "content" key holding downloaded content #873
+
+Fixes:
+
+- Fix `bva` scraper and backscraper #873
+- Fix `arizctapp_div_1` update module_xp xpath #1830
+- Fix `prsupreme` empty case names caused by extra whitespace #1825
+- Fix `dc` update URL to include `-and-` segment #1832
+
+## 2.8.1 - 2026-02-26
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `illappct` docket regex to match `ILL App` citations and normalize them to `IL App` #1726
+- Fix `gactapp` base URL from `gaappeals.us` to `gaappeals.gov` #1810
+- Fix `texapp` add disposition as a local variable #1817
+
+## 2.8.0 - 2026-02-23
+
+Features:
+-
+
+Changes:
+
+- Rename all `texapp_*` scrapers to `txctapp*`
+
+Fixes:
+
+- Make tames scraper behave more like a browser for form submission.
+- Fix `texapp` download URL XPath to use case-insensitive matching for opinion type detection #1813
+
+## 2.7.8 - 2026-02-16
+
+Features:
+-
+
+Changes:
+
+- Rewrite `ariz` and `arizctapp_div_1` to use new API #1707
+- fix(pasuperct): Exclude "Com." from case name shorts #1737
+
+Fixes:
+
+- Fix `texapp` opinion type detection to check disposition text for concurrence/dissent #1791
+- fix `michctapp` captcha block by using new url #1677
+- fix `tex` add error handling for empty order list to prevent IndexError #1738
 
 ## Current
+
+**2.7.7 - 2026-02-13**
+
+Features:
+-
+
+Changes:
+-
+
+Fixes:
+
+- Fix `wyo` scraper to use updated document base URL
+
+## Past
+
+**2.7.6 - 2026-02-10**
+
+Features:
+-
+
+Changes:
+
+- Rename `trial_court` field to `originating_court` in Texas dockets
+- Add `court_type` field to Texas dockets, originating court info, and appellate court info
+- Add `district` field to Texas originating court info where relevant
+- Update Texas case name shortening to be more robust
+- Handle `get_extension` errors: log timeout/connection errors as warnings instead of errors #1644
+
+Fixes:
+
+- Fix incorrectly shortened case names in Texas Court of Criminal Appeals scraper
+- Revert Mass back to old for to collect PDF
+- fix `ca2` oral arguments scraper to handle mixed columns and missing dates #1775
+- Clean Texas URLs while parsing so that they are valid
+
+**2.7.5 - 2026-01-28**
+
+Features:
+-
+
+Changes:
+
+- Revert Mass back to old for to collect PDF
+
+Fixes:
+
+- fix `ca2` oral arguments scraper to handle mixed columns and missing dates #1775
+- Fix `texapp` check that opinion belongs to specific court #1781
+- Fix `prsupreme` and `prapp` SSL verification issues; Add backscraping to `prsupreme` #1763
+
+**2.7.4 - 2026-01-22**
+
+Features:
+-
+
+Changes:
+
+- Update `haw` and `hawapp` to ClusterSite #1772
+- updates `texapp`, `texcrimapp` to ClusterSite #1767
+- update `michctapp` to ClusterSite #1652
+
+**2.7.3 - 2025-01-15**
+
+Features:
+
+- Add scrapers for Texas Supreme Court, Court of Criminal Appeals, and Courts of Appeal
+- Add enumerating texas supreme courts and court of appeals dockets #1756
+- `tex` now uses ClusterSite #1762
+
+Changes:
+
+- `wva`, `wvactapp` now use ClusterSite #1748
+- `conn` and `connappct` now use ClusterSite #1733
+
+Fixes:
+
+- fix `tenn` miss adding opinion types #1749
+- add ADDENDUM to OpinionType enum #1754
+- update `lactapp_1` parameters for 2026 #1734
+
+**2.7.2 - 2025-01-13**
+
+Features:
+
+- Add opinion type sanity check #1736
+
+Changes:
+
+- `wva`, `wvactapp` now use ClusterSite #1748
+- `conn` and `connappct` now use ClusterSite #1733
+
+Fixes:
+
+- fix `tenn` miss adding opinion types #1749
+- add ADDENDUM to OpinionType enum #1754
+- update `lactapp_1` parameters for 2026 #1734
+- fix `ala` by fetching detailed publication data from new API endpoint #1758
+
+**2.7.1 - 2025-01-07**
+
+Features:
+
+- Add new scraper `tenn_workers_comp` for the Supreme Court of Tennessee, Workers Compensation Panel #1725
+- Adds helper to normalize attachment numbers for ACMS uploads #1744
+
+Fixes:
+
+- pa, pasuperct and pacommwct now use ClusterSite #1694
+- refactor `wash`; make `washctapp` scrapers inherit from it #1745
+
+**2.7.0 - 2025-12-31**
+
+Features:
+
+- Minor version bump: Add a new ClusterSite class that returns OpinionClusters with grouped opinions. See #883
+- Convert `tenn`, `tenncrimapp` and `tennctapp` to ClusterSite #1704
+- Add new `handle_email` method to `SCOTUSEmail` to confirm subscriptions or fetch full dockets depending on email type
+  #1712
+
+Changes:
+
+- Improve `colo` scraper to automatically increase per_page parameter and add required field validation before appending
+  cases #1656
+- BREAKING CHANGE: Output format of `SCOTUSEmail` changed
+
+Fixes:
+
+- `ca11_p` and `ca11_u` parse lower court docket number #1710
+- fix `bia` and `olc` by handling "I am not a robot challenge" when downloading a document #1724
+- fix Delaware scrapers, site HTML had changed #1728
+
+**2.6.100 - 2025-12-22**
+
+Fixes:
+
+- `ca11_p`: remove hardcoded status field #1708
+- `tenn`: fix opinion type extraction #1704
+- `tenn`: fix docket number and judges extraction #1705
+- `delaware`: update XPath selectors for changed website structure #1713
+
+**2.6.99 - 2025-12-10**
+
+Changes:
+
+- Added more fields to the SCOTUS docket parsers
+
+Fixes:
+
+- fix `okla` improve cleanup_content method to use CSS selectors and return bytes #1692
+- Fix `fla` and `fladistctapp` scrapers by scraping new API endpoint #1690
+- fix `uscgcoca` and `asbca` headers #1664
+- `okla` `cleanup_content` now deletes HTML comments that were causing duplicates #1697
+- make `tenn` use whitelisted user agent #1689
+
+**2.6.98 - 2025-12-05**
+
+Fixes:
+
+- fix recap.email docket_number parsing inside nested tags
+
+**2.6.97 - 2025-11-28**
+
+Fixes:
+
+- fix `alaska` scraper to skip header rows and prevent IndexError in table parsing #1674
+- fix `ky` and `kyctapp` IndexError when API returns empty document details #1666
+- fix `nyappdiv` and `nytrial` docket number extraction regex to require at least 1 number #1655
+
+**2.6.96 - 2025-11-21**
+
+Changes:
+
+- Add scotus_email to parse SCOTUS email notifications
+- Update scotus_email scraper to handle subscription confirmation emails
+
+Fixes:
+
+- fix `mich` and `michctapp` bad docket numbers #1648
+- fix `nyappdiv`, `nyappterm` and `nytrial` extract_from_text to get docket numbers #1655
+- remove unnecessary print statements from test cases
+- fix `illappct` oral args scrapers to handle nested HTML elements in case names #1668.
+- fix `illappct` oral argument scraper skipping the first row of HTML tables
+
+**2.6.95 - 2025-11-02**
+
+Changes:
+
+- update cleanup_content method for `ny` #1637
+- Update ga ct app backscraper
+
+Fixes:
+
+- cleanup_content method called twice in sample_caller.py
+
+**2.6.94 - 2025-10-28**
+
+Changes:
+
+- update `guam` domain #1635
+
+Fixes:
+
+- handle different table structures in `uscgcoca` scraper #1526
+- update cleanup_content method for `ny` #1637
+- add expected content types for document handling in 'texapp' scraper #1636
+- update `delaware`, `delch`, `delsuperct` and `delctcompl` scrapers and examples #1641
+
+**2.6.93 - 2025-10-17**
+
+Changes:
+
+- add backscraper for haw #1583
+
+Fixes:
+
+- fix download_content call in sample_caller #1619
+- fix `cal` rename key in OriginatingCourtInformation for accuracy #1625
+- fix `texbizct` improve error handling for name and citation extraction from titles #1629
+- add `ncbizct` to init #1631
+
+**2.6.92 - 2025-10-01**
+
+Features:
+
+- Add new method `download_content` to `AbstractSite` for improved file retrieval #1535
+
+Changes:
+
+- Retrieve lower court information in `sc` #1569
+
+**2.6.91 - 2025-09-26**
+
+Changes:
+
+- Retrieve lower court information in `vt` #1569
+- Retrieve lower court information in `sd` #1569
+- Retrieve lower court information in `va` #1569
+- Retrieve lower court information in `utah` #1569
+- Retrieve lower court information in `wyo` #1569
+- Retrieve lower court information in `dc` #1569
+- Retrieve lower court information in `cal` scrapers #1569
+- Retrieve lower court information in 'alaska' #1569
+- Add lower court extraction to `federal_appellate` scrapers #1560
+- Add lower court extraction to `iowa` scrapers #1569
+- Retrieve lower court information in `delaware` scrapers #1569
+- Retrieve lower court information in `idaho` #1569
+- Retrieve lower court information in `ky` #1569
+- Retrieve lower court information in `la` #1569
+- Retrieve lower court information in `mont` #1569
+- Retrieve lower court information in `nd` #1569
+- Retrieve lower court information in `nj` #1569
+- Retrieve lower court information in `neb` #1569
+- Clean up `haw` names #1582
+- Retrieve lower court information in `nm` #1569
+- Retrieve lower court information in `or` #1569
+- Update `mdag` scraper, site has changed #1598
+- Retrieve lower court information in `pa` #1569
+
+Fixes:
+
+- fix `tax` scraper #1599
+- Fix `conn` to handle unusual HTML #1601
+
+**2.6.90 - 2025-09-10**
+Features:
+
+- Add scotus_docket_report_html to parse SCOTUS HTML dockets
+- Add scotus_docket_report_htm to parse SCOTUS HTM dockets
+
+Fixes:
+
+- Fix connappct #1580
+- fix `bia` scraper #1574
+
+**2.6.89 - 2025-09-02**
+
+Features:
+
+- Add scotus_docket_report to parse SCOTUS JSON dockets
+- Add support for downloading documents from the ACMS court API.
+
+Changes:
+
+- Retrieve lower court information in `bap9` and `bap10` #1567
+- Retrieve lower court information in `ariz`  #1569
+
+Fixes:
+
+- fix `cafc` oral arguments scraper #1570
+
+**2.6.88 - 2025-08-27**
+
+Features:
+
+- add `texbizct` new scraper for Texas Business Court #1437
+
+Fixes:
+
+- Fix `nd` use empty string when no summary is found #1561
+
+**2.6.87 - 2025-08-25**
+
+Features:
+
+- add `bap8` scraper, inherits from `ca8` #1544
+- add `bap6` scraper, inherits from `ca6` #1544
+- implement `neb` and `nebctapp` extract_from_text #1549
+
+**2.6.86 - 2025-08-15**
+
+Fixes:
+
+- Update `bap1` backscraper #1539
+- Fix `ky` scraper to handle missing document text to prevent errors #1540
+
+**2.6.85 - 2025-08-14**
+
+Fixes:
+
+- Forces proper html structure for `colo` #1538
+- remove should_have_results flag from `wis` `mass` to prevent false positives #1513
+- Fixes parsing of email ACMS and `ord` docket entry short description variations
+
+**2.6.84 - 2025-08-07**
+
+Features:
+
+- add `indctapp_reclassified` new scraper for reclassified opinions #1509
+-
+
+Changes:
+
+- Update `uscgcoca` scraper, site has changed #1526
+
+Fixes:
+
+- Add new validation to `mont.Site.cleanup_content` to ensure that the content is not an error page #1520
+- Improve `nd` scraper to extract citations from the html #1301
+
+**2.6.83 - 2025-08-05**
+
+Features:
+
+- Implement scraper for texas 15th court of appeals  `texapp_15`  #1436
+- Add support for downloading ACMS NDA free look documents. #1510
+
+**2.6.82 - 2025-07-31**
+
+Changes:
+
+- Update README.rst
+- Add CONTRIBUTING.md
+- Update `lactapp_1` scraper, site has changed #1357
+
+Fixes:
+
+- Fix `ca9` download URLs #1515
+
+**2.6.81 - 2025-07-28**
+
+Features:
+
+- Add `masssuperct` new scraper for Massachusetts Superior Court #1498
+- Fix document URL parsing in plain‑text email minute‑entry notifications #1362
+- Add `bap9` backscraper #1008
+- Add `ca9` backscraper
+
+Changes:
+
+- Update `lactapp_1` scraper, site has changed #1357
+- improve `ind` add new fields for lower court details and judge names #1266
+
+**2.6.80 - 2025-07-16**
+
+Features:
+
+- Add error handling for scrapers with expected results #1447
+- Add a check to verify ACMS user data is loaded before querying attachment pages #1495
+- Add `alaska_slip` and `alaska_u` new scrapers #1478
+
+Changes:
+
+- Expanded ACMS URL matching to support both HTTP and HTTPS protocols.
+
+Fixes:
+
+- Fix `visuper_p` adaptation to new html tags #1489
+- Fix `ariz` update download URLs #1474
+- handle empty cases in `ca7` scraper #1484
+- fix `idaho_civil` preformat date to prevent parsing errors #1284
+
+**2.6.79 - 2025-07-08**
+
+Changes:
+
+- Updates `PacerSession` class to make ACMS authentication optional, and disabled it by default.
 
 **2.6.78 - 2025-06-18**
 
 Features:
+
 - Added support for parsing ACMS NDA notifications
 - Enhances `PacerSession` class to support ACMS authentication.
 - Adds case purchasing functionality to `ACMSDocketReport`.
 - Added support for parsing docket numbers with case types with up to five letters
+- Introduces logic to purchase ACMS docket entry attachment pages.
 
 Changes:
+
 - Refactor `ACMSDocketReport` to handle missing "date entered" values gracefully
   and expands the use of raw data fields for reliable date information. #1459
+- make `nytrial` back scraping dynamic #1402
 - Improve `alaska` scraper to handle case page to retrieve download_url #937
 
 Fixes:
+
 - Improve `ny` cleanup_content to remove email protection that was causing
   duplicates #1450
 - Fix `minn` move `need_special_headers` to `__init__` #1470
 
-
-## Past
-
 **2.6.77 - 2025-06-17**
 
 Changes:
+
 - New scraper `lactapp_4` for Lousiana Court of Appeals, Fourth Circuit
 - Update `uscgcoca` add backscraper #1431
 - Update `tenn` add backscraper #1425
 
 Fixes:
+
 - Add "lower_court_ids" to fields returned by OpinionSite #1432
 - Fix `va` collecting bad docket_number values #1441
 - Fix `mich` change date expected key to `date_filed` #1445
@@ -61,29 +1298,33 @@ Fixes:
 **2.6.76 - 2025-06-12**
 
 Changes:
--  Fix `tex` get opinions from the orders on causes page #1410
--  Fix `sd`
--  Fix `bap1` not scraping recent data #1422
+
+- Fix `tex` get opinions from the orders on causes page #1410
+- Fix `sd`
+- Fix `bap1` not scraping recent data #1422
 
 **2.6.75 - 2025-06-09**
 
 Changes:
+
 - Update kan and kanctapp scrapers
 - update `nc` scraper to OpinionSiteLinear and new website #1373
 
 **2.6.74 - 2025-06-04**
 
 - Add `test_hashes` optional argument to `sample_caller`. Helpful to detect
-timestamped opinions and check if `Site.cleanup_content` is working #1392
+  timestamped opinions and check if `Site.cleanup_content` is working #1392
 - fix tenn scraper parsing error #1413
 - fix package release process #1426
 
 **2.6.71 - 2025-05-30**
 
 Changes:
+
 - Added support for Python 3.13
 
 Fixes:
+
 - Improve test speed by reducing the size of the uscfc_vaccine example array
 - Fix `asbca` scraper to use special headers #1411
 - Fix `uscgcoca` by using `self.needs_special_headers` #1419
@@ -91,21 +1332,23 @@ Fixes:
 **2.6.70 - 2025-05-23**
 
 Features:
+
 - Fix for CA4 - minor edge case bug
 
 **2.6.69 - 2025-05-21**
 
 Features:
+
 - New scraper `ncbizct` for North Carolina Business Court
 
 Fixes:
+
 - Fixes for `prapp` with backscraper
 
 **2.6.68 - 2025-05-12**
 
 - Add auth token to ny trial courts
 - Clean up ala scraped case names #1272
-
 
 **2.6.67 - 2025-05-08**
 
@@ -114,7 +1357,6 @@ Fixes:
 - Update `sd` backscraper and extract from text
 - Fix `bia` scraper and add extract from text test cases
 - Implement `cleanup_content` for `ny` sites #1393
-
 
 **2.6.66 - 2025-04-29**
 
@@ -129,12 +1371,10 @@ Fixes:
 - `nh` was blocking; fixed by updating the user agent string #1370
 - Update `vtsuperct_*` scrapers to inherit `extract_from_text` from `vt` #1150
 
-
 **2.6.64 - 2025-04-10**
 
 - Fix `me` Update maine scraper and add backscraper #1360
 - Sites were blocking `cafc` scrapers. Fixed by passing a browser user agent #1366
-
 
 **2.6.63 - 2025-03-25**
 
@@ -162,360 +1402,387 @@ Fixes:
 **2.6.58 - 2025-02-26**
 
 - Fixes:
-  - Add backscraper for `mesuperct` #1328
-  - Fix `mont` cleanup_content, would fail when content was bytes #1323
+    - Add backscraper for `mesuperct` #1328
+    - Fix `mont` cleanup_content, would fail when content was bytes #1323
 
 **2.6.57 - 2025-02-25**
 
 - Fixes:
-  - fix cafc oral argument scraper PR (#1325)[https://github.com/freelawproject/juriscraper/pull/1325]
-  - ignore future date sanity check when date filed is approximate #1321
-  - new exception InvalidDocumentError to be raised when an error page is detected #1329
-  - update mont parsing; and raise InvalidDocumentError #1329
+    - fix cafc oral argument scraper PR (#1325)[https://github.com/freelawproject/juriscraper/pull/1325]
+    - ignore future date sanity check when date filed is approximate #1321
+    - new exception InvalidDocumentError to be raised when an error page is detected #1329
+    - update mont parsing; and raise InvalidDocumentError #1329
 
 - Features
-  - Add workflow to check for new entries in CHANGES.md file
-
+    - Add workflow to check for new entries in CHANGES.md file
 
 **2.6.56 - 2025-02-19**
 
 - Fixes:
-  - n/a
+    - n/a
 
 - Features:
-  - MT upgrade to opinion site linear
-  - Add citation extraction and author for MT
-
+    - MT upgrade to opinion site linear
+    - Add citation extraction and author for MT
 
 **2.6.55 - 2025-02-10**
 
 - Fixes:
-  - `cafc` opinion scraper now requests using `verify=False` #1314
-  - recap: support for parsing docket_numbers wrapped in a `tel:` href tag
-     in appellate dockets. #915
+    - `cafc` opinion scraper now requests using `verify=False` #1314
+    - recap: support for parsing docket_numbers wrapped in a `tel:` href tag
+      in appellate dockets. #915
 
 - Features:
-  - recap: improvement to the download_pdf method to handle cases where
-  attachment pages are returned instead of the expected PDF documents. #1309
+    - recap: improvement to the download_pdf method to handle cases where
+      attachment pages are returned instead of the expected PDF documents. #1309
 
 **2.6.54 - 2025-01-24**
 
 - Fixes:
-  - `ca6` oral argument scraper is no longer failing
-  - update the pypi.yml github actions workflow to solve a bug with twine and
-    packaging packages interaction. It now forces the update of packaging
-  - due to that bug, we discarded the 2.6.53 version
+    - `ca6` oral argument scraper is no longer failing
+    - update the pypi.yml github actions workflow to solve a bug with twine and
+      packaging packages interaction. It now forces the update of packaging
+    - due to that bug, we discarded the 2.6.53 version
 
 **2.6.52 - 2025-01-20**
 
 - Fixes:
-  - `AppellateDocketReport.download_pdf` now returns a two-tuple containing the
-    response object or None and a str. This aligns with the changes introduced
-    in v 2.5.1.
+    - `AppellateDocketReport.download_pdf` now returns a two-tuple containing the
+      response object or None and a str. This aligns with the changes introduced
+      in v 2.5.1.
 
 **2.6.51 - 2025-01-14**
 
 - Fixes:
-  - `extract_from_text` now returns plain citation strings, instead of parsed dicts
+    - `extract_from_text` now returns plain citation strings, instead of parsed dicts
 
 **2.6.50 - 2025-01-10**
 
 - Fixes:
-  - add tests to ensure that `extract_from_text` does not fail
-    when it does not find what it looks for; and that it always
-    returns a dict
-  - updated `pasuperct`, `bia`, `bap1`, `nm` and `sd` `extract_from_text` methods
-  - refactored `pacer.email._parse_bankruptcy_short_description`
-  - added tests for new courts `flsb`, `nceb`
-  - added tests for multi docket NEFs
+    - add tests to ensure that `extract_from_text` does not fail
+      when it does not find what it looks for; and that it always
+      returns a dict
+    - updated `pasuperct`, `bia`, `bap1`, `nm` and `sd` `extract_from_text` methods
+    - refactored `pacer.email._parse_bankruptcy_short_description`
+    - added tests for new courts `flsb`, `nceb`
+    - added tests for multi docket NEFs
 
 - Features
-  - `pacer.email._parse_bankruptcy_short_description` now supports Multi Docket NEFs
+    - `pacer.email._parse_bankruptcy_short_description` now supports Multi Docket NEFs
 
 **2.6.49 - 2025-01-08**
 
 - Fixes:
-  - `nh` scrapers no longer depend on harcoded year filter
-  - Fixed `absca` tests that were failing due to change of year
-  - `pasuperct` now collects citations
-  - `pa`, `pasuperct` and `pacommcwt` now paginate results
-
+    - `nh` scrapers no longer depend on harcoded year filter
+    - Fixed `absca` tests that were failing due to change of year
+    - `pasuperct` now collects citations
+    - `pa`, `pasuperct` and `pacommcwt` now paginate results
 
 **2.6.48 - 2024-12-31**
 
 - Fixes:
-  - updated `idaho_*` scrapers to OpinionSiteLinear
-  - updated `cadc` scrapers to new site
-  - `okla` now skips rows with no docket number
-  - fixes for PACER appellate dockets parsing
+    - updated `idaho_*` scrapers to OpinionSiteLinear
+    - updated `cadc` scrapers to new site
+    - `okla` now skips rows with no docket number
+    - fixes for PACER appellate dockets parsing
 
 **2.6.47 - 2024-12-12**
 
 - Fixes:
-  - standardize usage of download methods in scrapers (_download, _request_url_get, _request_url_post)
-  - refactor scrapers to do not return "Per Curiam" as value for "author_str" or "judges"
+    - standardize usage of download methods in scrapers (_download, _request_url_get, _request_url_post)
+    - refactor scrapers to do not return "Per Curiam" as value for "author_str" or "judges"
 
 - Features
-  - added `extract_from_text` to `sc`
-
+    - added `extract_from_text` to `sc`
 
 **2.6.46 - 2024-12-10**
 
 - Fixes:
-  - Support for parsing the new format of appellate attachment pages has been added
+    - Support for parsing the new format of appellate attachment pages has been added
 
 **2.6.45 - 2024-12-05**
 
 - Features:
-  - AbstractSite now supports saving responses and response headers.
-  Use it with new optional argument for the sample caller `save-responses`.
-  - Delete `--daemon` and `--report` options
+    - AbstractSite now supports saving responses and response headers.
+      Use it with new optional argument for the sample caller `save-responses`.
+    - Delete `--daemon` and `--report` options
 
 **2.6.44 - 2024-11-27**
 
 - Fixes:
-  - Fixes `colo`
+    - Fixes `colo`
 
 **2.6.43 - 2024-11-21**
 
 - Fixes:
-  - Fixes `ky` and `colo`
+    - Fixes `ky` and `colo`
 
 **2.6.42 - 2024-11-21**
 
 - Fixes:
-  - Fix `mass` and `massctapp` cleanup content method
+    - Fix `mass` and `massctapp` cleanup content method
 
 **2.6.40 - 2024-11-20**
 
 - Fixes:
-  - Fix `mass` and `massctapp` scrapers, scrape new endpoint
-  - Exclude "Commonwealth" string from short case names
+    - Fix `mass` and `massctapp` scrapers, scrape new endpoint
+    - Exclude "Commonwealth" string from short case names
 
 **2.6.39 - 2024-11-18**
 
 - Fixes:
-  - Fix `Kansas, Ohio Ct App's 1-13` opinion scraper
+    - Fix `Kansas, Ohio Ct App's 1-13` opinion scraper
 
 **2.6.38 - 2024-11-08**
 
 - Fixes:
-  - Fix `uscfc` opinion scraper
+    - Fix `uscfc` opinion scraper
 
 - Features:
-  - RECAP: add new sealed document phrase
+    - RECAP: add new sealed document phrase
 
 **2.6.37 - 2024-10-22**
 
 Fixes:
-  - Fix for `okla` cleanup_content
+
+- Fix for `okla` cleanup_content
 
 **2.6.35 - 2024-10-22**
 
 Fixes:
-  - Fix for `okla` cleanup_content
+
+- Fix for `okla` cleanup_content
 
 **2.6.34 - 2024-10-22**
 
 Fixes:
-  - Fix for `okla` cleanup_content
+
+- Fix for `okla` cleanup_content
 
 **2.6.32 - 2024-10-21**
 
 Features:
-  - added `okla` cleanup_content
+
+- added `okla` cleanup_content
 
 Fixes:
-  - updated `coloctapp` cleanup_content
 
+- updated `coloctapp` cleanup_content
 
 **2.6.31 - 2024-10-21**
 
 Fixes:
-  - `neb` now handles rows with no links
-  - `coloctapp` update cleanup_content
-  - fix `la` xpath selector that was skipping some cases
+
+- `neb` now handles rows with no links
+- `coloctapp` update cleanup_content
+- fix `la` xpath selector that was skipping some cases
 
 Features:
-  - new scraper `lactapp_5` for Lousiana Court of Appeals, Fifth Circuit
-  - now sending a `logger.error` call to Sentry when an scraped date is in the future
+
+- new scraper `lactapp_5` for Lousiana Court of Appeals, Fifth Circuit
+- now sending a `logger.error` call to Sentry when an scraped date is in the future
 
 **2.6.30 - 2024-10-10**
 
 Fixes:
-  - fix `CADC` oral arguments
+
+- fix `CADC` oral arguments
 
 **2.6.29 - 2024-10-10**
 
 Fixes:
-  - fix `or` and `orctapp` scraper, scraping new endpoint
-  - fix cache control headers in `AbstractSite`
-  - fix `sc` expected content types
+
+- fix `or` and `orctapp` scraper, scraping new endpoint
+- fix cache control headers in `AbstractSite`
+- fix `sc` expected content types
 
 **2.6.28 - 2024-09-27**
 
 Features:
-  - new scraper `sc_u`
+
+- new scraper `sc_u`
 
 Fixes:
-  - handle `illappct` (oral args) rows with no download link
-  - `ca11` update to Oral Argument Site Linear
-  - `cadc_u` change docket number getter
-  - `sc` implement new site
+
+- handle `illappct` (oral args) rows with no download link
+- `ca11` update to Oral Argument Site Linear
+- `cadc_u` change docket number getter
+- `sc` implement new site
 
 **2.6.27 - 2024-09-16**
 
 Fixes:
-  - Fixes `coloctapp`
 
-
+- Fixes `coloctapp`
 
 **2.6.25 - 2024-09-16**
 
 Fixes:
-  - Handle `nh` edge cases
-  - Update `ohioctapp` to return "lower_courts" in order to disambiguate dockets across districts
-  - Update `lib.string_utils.clean_string` to no longer delete semicolons
+
+- Handle `nh` edge cases
+- Update `ohioctapp` to return "lower_courts" in order to disambiguate dockets across districts
+- Update `lib.string_utils.clean_string` to no longer delete semicolons
 
 **2.6.25 - 2024-09-10**
 
 Fixes:
-  - `ny` Fixes NY
-  - Updates nyappdiv to inherit ny
-  - fixes tests
+
+- `ny` Fixes NY
+- Updates nyappdiv to inherit ny
+- fixes tests
 
 **2.6.24 - 2024-09-05**
 
 Fixes:
-  - `vt` now collects neutral citations
-  - Fix `ca8` and updated to OpinionSiteLinear
-  - Update README
+
+- `vt` now collects neutral citations
+- Fix `ca8` and updated to OpinionSiteLinear
+- Update README
 
 **2.6.23 - 2024-09-03**
 
 Fixes:
-  - `wis` now collects neutral citations
-  - `ky` now skips rows with no documents
+
+- `wis` now collects neutral citations
+- `ky` now skips rows with no documents
 
 Features:
-  - new scraper `wisctapp`
+
+- new scraper `wisctapp`
 
 **2.6.21 - 2024-08-30**
 
 Fixes:
-  - `fladistctapp` docket numbers are now unique across districts
-  - updated `ca11` html selectors
-  - updated `pa` to new API format
-  - set needs_special_headers to True for `vt`
+
+- `fladistctapp` docket numbers are now unique across districts
+- updated `ca11` html selectors
+- updated `pa` to new API format
+- set needs_special_headers to True for `vt`
 
 Features:
-  - implemented dynamic backscraper and extract_from_text for `conn`
+
+- implemented dynamic backscraper and extract_from_text for `conn`
 
 **2.6.20 - 2024-08-28**
 
 Fixes:
-  - Changed to nested format for attachments in the InternetArchive report
+
+- Changed to nested format for attachments in the InternetArchive report
 
 **2.6.19 - 2024-08-26**
 
 Fixes:
-  - `nh` renamed to `nh_p` and working by using special headers
+
+- `nh` renamed to `nh_p` and working by using special headers
 
 Features:
-  - New scraper: `nh_u`
-  - Handle new bankruptcy attachment page format
-  - Make docket history report parser more robust
+
+- New scraper: `nh_u`
+- Handle new bankruptcy attachment page format
+- Make docket history report parser more robust
 
 **2.6.18 - 2024-08-22**
 
 Features:
-  - SCOTUS backscraper
+
+- SCOTUS backscraper
 
 Fixes:
-  - Improvements to bankruptcy docket parsing
-  - Added `njd` regression tests files
+
+- Improvements to bankruptcy docket parsing
+- Added `njd` regression tests files
 
 **2.6.17 - 2024-08-19**
 
 Fixes:
-  - RECAP:
+
+- RECAP:
     - email: now parses short description for `okeb`
     - Fixed IndexOutOfRange error in DocketReport::_set_metadata_values method
-  - Scrapers:
+- Scrapers:
     - fixed `cal` SSL errors
     - now collecting citations for `minn`
 
 **2.6.16 - 2024-08-12**
 
 Fixes:
-  - Fixed Minnesota and implemented it's backscraper
+
+- Fixed Minnesota and implemented it's backscraper
 
 **2.6.15 - 2024-08-07**
 
 Features:
-  - Added support for parsing PACER bankruptcy and district docket number components.
+
+- Added support for parsing PACER bankruptcy and district docket number components.
 
 **2.6.14 - 2024-08-07**
 
 Features:
-  - Add special site headers attribute.
-  - NY Api changes
+
+- Add special site headers attribute.
+- NY Api changes
 
 Fixes:
-  - ND (with dynamic backscraper)
-  - PA
-  - Ark
+
+- ND (with dynamic backscraper)
+- PA
+- Ark
 
 **2.6.13 - 2024-08-01**
 
 Features:
-  - Adds the de_seq_num to the download method.
+
+- Adds the de_seq_num to the download method.
 
 Fixes:
-  - Adds headers attribute to the massappct_u scraper.
-  - Updates the URL for the oklaag scraper.
-  - Updates the setup.py configuration to address deprecated setuptools options and improves test management using pytest.
+
+- Adds headers attribute to the massappct_u scraper.
+- Updates the URL for the oklaag scraper.
+- Updates the setup.py configuration to address deprecated setuptools options and improves test management using pytest.
 
 **2.6.12 - 2024-07-22**
 
 Features:
-  - Update free opinion report to store the params used for each request
+
+- Update free opinion report to store the params used for each request
 
 **2.6.11 - 2024-07-22**
 
 Fixes:
-  - Oklahoma opinion scrapers
-  - CAFC oral argument scraper
-  - ASBCA opinion scrapers
-  - renamed logger from "Logger" to "juriscraper.lib.log_tools", which follows hierarchical naming convention
+
+- Oklahoma opinion scrapers
+- CAFC oral argument scraper
+- ASBCA opinion scrapers
+- renamed logger from "Logger" to "juriscraper.lib.log_tools", which follows hierarchical naming convention
 
 Features:
-  - RECAP email: Support short_description parsing for tnmb and nhb
-  - md backscraper
-  - OpinionSiteLinear now supports returning "other_dates" key
-  - New scraper for ky and kyctapp
+
+- RECAP email: Support short_description parsing for tnmb and nhb
+- md backscraper
+- OpinionSiteLinear now supports returning "other_dates" key
+- New scraper for ky and kyctapp
 
 **2.6.10 - 2024-07-11**
 
 Features:
-  - Fixes colo scraper expected_content_type
 
+- Fixes colo scraper expected_content_type
 
 **2.6.9 - 2024-07-10**
 
 Features:
 
 - Fixes for
-  - Idaho Civil
-  - Idaho Criminal
-  - Idaho Ct Appeals Civil, Criminal, Unpublished
-  - N. Mariana Islands
-  - Disables Mississippi
-  - Disables Missouri
-  - Fix Nebraska/App
-  - Pacer Email TXNB
+    - Idaho Civil
+    - Idaho Criminal
+    - Idaho Ct Appeals Civil, Criminal, Unpublished
+    - N. Mariana Islands
+    - Disables Mississippi
+    - Disables Missouri
+    - Fix Nebraska/App
+    - Pacer Email TXNB
 - Adds
-  - ColoCtApp Dynamic backscraper
+    - ColoCtApp Dynamic backscraper
 
 **2.6.8 - 2024-07-03**
 
@@ -540,31 +1807,29 @@ Features:
 Changes:
 
 - Fixes for
-  - Mass
-  - RI
-  - NJ
-  - BIA
-  - CalAG
-
+    - Mass
+    - RI
+    - NJ
+    - BIA
+    - CalAG
 
 **2.6.4 - 2024-06-11**
 
 Changes:
 
 - Add dynamic backscrapers for:
-  - tex
-  - nmcca
-  - wyo
-  - vtsuperct
-  - alaska
+    - tex
+    - nmcca
+    - wyo
+    - vtsuperct
+    - alaska
 
 - Fixed wrong xpath selectors and updated to OpinionSiteLinear
-  - dcd
-  - nd
-  - ca1
+    - dcd
+    - nd
+    - ca1
 
 - Solved bug with python3.12 tests in Github Actions
-
 
 **2.6.3 - 2024-05-24**
 
@@ -572,7 +1837,6 @@ Changes:
 
 - PACER: Refactor login logic for PACER sessions.
 - pacer.email: Added short description parsing for `pamb`
-
 
 **2.6.2 - 2024-05-20**
 
@@ -591,16 +1855,17 @@ Changes:
 Features:
 
 - Added dynamic backscrapers for these scrapers and their inheriting classes
-  - afcca
-  - olc
-  - bap10
-  - fla
-  - nyappterm
-  - ill
+    - afcca
+    - olc
+    - bap10
+    - fla
+    - nyappterm
+    - ill
 
 - pacer.email: Added short description parsing for `deb` and `mdb`
 
 Changes:
+
 - Updated `cal` and `calctapp_*` to OpinionSiteLinear
 
 **2.6.0 - 2024-04-03**
@@ -612,9 +1877,9 @@ Features:
 Changes:
 
 - Breaking change has been made to the FreeOpinionReport its 'data' property now
- returns a dictionary containing the FreeOpinionRow fields, instead of returning
- a Python object with their properties. This change aligns the method of
- returning 'data' in this report with that of other reports.
+  returns a dictionary containing the FreeOpinionRow fields, instead of returning
+  a Python object with their properties. This change aligns the method of
+  returning 'data' in this report with that of other reports.
 - Fixes to texag, tex
 
 ## Past
@@ -786,7 +2051,7 @@ Changes:
 
 Features:
 
--
+- implement `mont` extract_from_text to extract docket numbers #1339
 
 Changes:
 
@@ -801,7 +2066,6 @@ Features:
 Changes:
 
 - Fix Nevada Supreme and Colorado Ct App
-
 
 **2.5.72 - 2023-12-12**
 
@@ -876,6 +2140,7 @@ Features:
 Changes:
 
 -
+
 **2.5.65 - 2023-11-19**
 
 Features:
@@ -896,11 +2161,9 @@ Changes:
 
 - Fix alabama to remove selenium
 
-
 **2.5.63 - 2023-11-18**
 
 Features:
-
 
 Changes:
 
@@ -910,11 +2173,9 @@ Changes:
 
 Features:
 
-
 Changes:
 
 - Fix NH Supreme Court
-
 
 **2.5.60 - 2023-11-18**
 
@@ -926,11 +2187,9 @@ Changes:
 
 - Fix Oregon Supreme Court
 
-
 **2.5.59 - 2023-11-18**
 
 Features:
-
 
 Changes:
 
@@ -940,7 +2199,6 @@ Changes:
 **2.5.58 - 2023-11-13**
 
 Features:
-
 
 Changes:
 
@@ -956,9 +2214,9 @@ Changes:
 
 - Abstract out date regexes into a new class attribute named DATE_REGEX.
 - Update deprecated key in setup.cfg file.
-- Refactor the message in the SlownessException to limit the precision to the right of the decimal point to three digits.
+- Refactor the message in the SlownessException to limit the precision to the right of the decimal point to three
+  digits.
 - Refactor the regex pattern in the scraper for Colorado Appeals Court
-
 
 **2.5.56 - 2023-10-09**
 
@@ -1220,7 +2478,7 @@ Changes:
 Features:
 
 - Disabled scrapers for
-  - ME
+    - ME
 
 Changes:
 
@@ -1231,16 +2489,15 @@ Changes:
 Features:
 
 - Added scrapers for
-  - Alabama Supreme Court
-  - Alabama Court of Civil Appeals
-  - Alabama Court of Criminal Appeals
-  - Colorado Supreme Court
-  - Colorado Court of Appeals
+    - Alabama Supreme Court
+    - Alabama Court of Civil Appeals
+    - Alabama Court of Criminal Appeals
+    - Colorado Supreme Court
+    - Colorado Court of Appeals
 
 Changes:
 
 - N/A
-
 
 **2.5.28 - 2022-12-22**
 
@@ -1259,18 +2516,17 @@ Changes:
 
 Features:
 
- - Added AppellateAttachmentPage report to parse appellate attachment pages.
+- Added AppellateAttachmentPage report to parse appellate attachment pages.
 
 Changes:
 
 - N/A
 
-
 **2.5.26 - 2022-11-15**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
@@ -1280,7 +2536,7 @@ Changes:
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
@@ -1290,7 +2546,7 @@ Changes:
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
@@ -1300,249 +2556,246 @@ Changes:
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix docket report entries table parsing for wiwb.
- - Ignore claims filings notifications for email report.
- - Fix UnicodeEncodeError when parsing a docket report.
+- Fix docket report entries table parsing for wiwb.
+- Ignore claims filings notifications for email report.
+- Fix UnicodeEncodeError when parsing a docket report.
 
 **2.5.22 - 2022-10-12**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix email report decoding.
+- Fix email report decoding.
 
 **2.5.21 - 2022-10-11**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix NEFs description parsing for cacb.
+- Fix NEFs description parsing for cacb.
 
 **2.5.20 - 2022-10-06**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix regression caught in COURTLISTENER-36Q, to properly handle
-   window.location redirects on weird PACER sites.
-
+- Fix regression caught in COURTLISTENER-36Q, to properly handle
+  window.location redirects on weird PACER sites.
 
 **2.5.19 - 2022-09-29**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix performance when downloading large PDFs (see #564)
+- Fix performance when downloading large PDFs (see #564)
 
 **2.5.18 - 2022-09-29**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Skip appellate attachment page when querying the download confirmation page
- - Skip appellate attachment page when downloading the free document
- - Fix getting filed date on email notifications
+- Skip appellate attachment page when querying the download confirmation page
+- Skip appellate attachment page when downloading the free document
+- Fix getting filed date on email notifications
 
 **2.5.17 - 2022-09-28**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Added DownloadConfirmationPage report to parse the PACER download
- confirmation page and get the following data:
-  - document_number
-  - docket_number
-  - cost
-  - billable_pages
-  - document_description
-  - transaction_date
+- Added DownloadConfirmationPage report to parse the PACER download
+  confirmation page and get the following data:
+- document_number
+- docket_number
+- cost
+- billable_pages
+- document_description
+- transaction_date
 
 **2.5.16 - 2022-09-11**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix for OA CA1
+- Fix for OA CA1
 
 **2.5.15 - 2022-09-06**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Update Selenium version 4.0.0.a7
-
+- Update Selenium version 4.0.0.a7
 
 **2.5.14 - 2022-09-02**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Update Selenium version
+- Update Selenium version
 
 **2.5.13 - 2022-08-24**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Added support to get attached documents from NEFs.
+- Added support to get attached documents from NEFs.
 
 **2.5.12 - 2022-08-12**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Added support to parse NDAs and download their free documents.
+- Added support to parse NDAs and download their free documents.
 
 **2.5.11 - 2022-07-29**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix Tax Scraper
+- Fix Tax Scraper
 
 **2.5.10 - 2022-07-28**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Bug fix
+- Bug fix
 
 **2.5.9 - 2022-07-28**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix CA4
+- Fix CA4
 
 **2.5.8 - 2022-07-26**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix Michigan Supreme Court
+- Fix Michigan Supreme Court
 
 **2.5.7 - 2022-06-29**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Added support for more PACER download document errors messages
- - Update thomas name in test files
- - Drop future opinions
- - Update url pattern for Wyoming
- - Fix all failing Illinois Oral Argument Scrapers
+- Added support for more PACER download document errors messages
+- Update thomas name in test files
+- Drop future opinions
+- Update url pattern for Wyoming
+- Fix all failing Illinois Oral Argument Scrapers
 
 **2.5.6 - 2022-05-17**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix Mass Land Court scraper
+- Fix Mass Land Court scraper
 
 **2.5.5 - 2022-05-17**
 
 Features:
 
- - N/A
+- N/A
 
 Changes:
 
- - Fix failing CAFC Oral Argument Scraper and Back Scraper.
+- Fix failing CAFC Oral Argument Scraper and Back Scraper.
 
 **2.5.4 - 2022-05-13**
 
 Features:
 
- - Fix Rhode Island scraper
+- Fix Rhode Island scraper
 
 Changes:
 
- - Update to Rhode island Published and Unpublished opinions.
+- Update to Rhode island Published and Unpublished opinions.
 
 **2.5.1 - 2022-04-25**
 
 Features:
 
- - The `download_pdf` function used by PACER reports now returns a two-tuple
-   containing the response object or None and a str. If there is an error,
-   the response object will be None and the str will have the error message. If
-   not, the response object will be populated and the str will be empty.
+- The `download_pdf` function used by PACER reports now returns a two-tuple
+  containing the response object or None and a str. If there is an error,
+  the response object will be None and the str will have the error message. If
+  not, the response object will be populated and the str will be empty.
 
-    To adapt to the new version you can change old code like this:
+  To adapt to the new version you can change old code like this:
 
-        r = report.download_pdf(...)
+       r = report.download_pdf(...)
 
-    To something like:
+  To something like:
 
-        r, _ = report.download_pdf(...)
+       r, _ = report.download_pdf(...)
 
-    If you wish, you could instead capture errors with something like:
+  If you wish, you could instead capture errors with something like:
 
-        r, msg = report.download_pdf(...)
-        if msg:
-            do_something()
+       r, msg = report.download_pdf(...)
+       if msg:
+           do_something()
 
 Changes:
 
- - Python 3.7 is no longer supported.
+- Python 3.7 is no longer supported.
 
- - See notes re features.
-
+- See notes re features.
 
 **2.4.11 - 2022-04-22**
 
@@ -1583,7 +2836,7 @@ Features:
 
 Changes:
 
-- Fixes for CGCCA, Conn, Conn App Ct.  Added pacer case_queries examples
+- Fixes for CGCCA, Conn, Conn App Ct. Added pacer case_queries examples
 
 **2.4.7 - 2022-01-21**
 
@@ -1645,9 +2898,10 @@ Features:
 
 Changes:
 
-- This version is a major release. Updated Opinion Sites to drop support for specific citation formats.  Instead, we now let the user or more generally eyecite determine the specific citation format.
-- Selenium support for Texas Court scrapers is removed.  This is part of removing selenium from all scrapers.
-- Also includes a small fix for the Board of Immigration Appeals docket numbers.  
+- This version is a major release. Updated Opinion Sites to drop support for specific citation formats. Instead, we now
+  let the user or more generally eyecite determine the specific citation format.
+- Selenium support for Texas Court scrapers is removed. This is part of removing selenium from all scrapers.
+- Also includes a small fix for the Board of Immigration Appeals docket numbers.
 
 - 2.3.29, 2022-01-03 - Update GA Supremes, MDAG
 - 2.3.28, 2021-12-30 - Add Board of Immigration Appeals (BIA), updates OA CA9, Fix NH
@@ -1655,11 +2909,13 @@ Changes:
 - 2.3.26, 2021-12-20 - Add Guam, Utah Ct App, Fix Ariz Ct App. Dist 2, Fix Ga Ct. App
 - 2.3.25, 2021-12-08 - Update US Tax Court (new website)
 - 2.3.24, 2021-12-06 - Fix new PACER session code
-- 2.3.23, 2021-12-02 - Updates feedparser, adds Python 3.9 and 3.10 tests, and broadens our regex for parsing in re case names from PACER dockets.
+- 2.3.23, 2021-12-02 - Updates feedparser, adds Python 3.9 and 3.10 tests, and broadens our regex for parsing in re case
+  names from PACER dockets.
 - 2.3.22, 2021-11-30 - Further CAFC fixes
 - 2.3.21, 2021-11-29 - Fixes CAFC, adds pre-commit
 - 2.3.20, 2021-11-17 - Fixes CA10 scraper, major code refactor
-- 2.3.19, 2021-11-16 - Fix PA, IL. Update PACER to use new auth API. Update geonames cache with latest population data. Throw exception in Free Opinions report when IP address on blocklist.
+- 2.3.19, 2021-11-16 - Fix PA, IL. Update PACER to use new auth API. Update geonames cache with latest population data.
+  Throw exception in Free Opinions report when IP address on blocklist.
 - 2.3.18, 2021-10-18 - Fix GA, CA9, CA10 Oral args
 - 2.3.17, 2021-08-17 - Add anonymizing function for PACER dockets
 - 2.3.16 - Yanked
@@ -1684,28 +2940,33 @@ Changes:
   accessed either locally or via a remote connection. See README for details on
   how to set the correct environment variables for your system.
 
-    PhantomJS has not been supported for several years. Though it has served us
-    well, the writing is on the wall that, like so many other once-useful
-    technologies, it too had to be abandoned, only to be replaced by
-    another tool. A tool that will be different in many ways, yet the same in
-    its inevitable abandonment and mortality. Long live PhantomJS: Born a
-    humble ghost; dying an immortal specter.
+  PhantomJS has not been supported for several years. Though it has served us
+  well, the writing is on the wall that, like so many other once-useful
+  technologies, it too had to be abandoned, only to be replaced by
+  another tool. A tool that will be different in many ways, yet the same in
+  its inevitable abandonment and mortality. Long live PhantomJS: Born a
+  humble ghost; dying an immortal specter.
 - 2.2.0, 2020-11-08 - Remove `_get_adapter_instance` method. It is unused, was
   a protected method, and causes many deprecation warnings in py3.
 - 2.1.* - Removes support for deprecated phantomjs location; it had been deprecated for two years.
-- 2.0.* - Adds support for Python 3.8 and supports Python 3, exclusively.  Begins testing to Github workflows and remove CircleCI.
-- 1.28.* - Changes the API for the InternetArchive parser so that it aligns with the rest of the parsers. Its constructor now requires a court_id value.
+- 2.0.* - Adds support for Python 3.8 and supports Python 3, exclusively. Begins testing to Github workflows and remove
+  CircleCI.
+- 1.28.* - Changes the API for the InternetArchive parser so that it aligns with the rest of the parsers. Its
+  constructor now requires a court_id value.
 - 1.27.* - Add merging of multi-event RSS entries
 - 1.26.* - Adds support for the Los Angeles Superior Court Media Access Portal (LASC MAP)
 - 1.25.* - Major refactor of tests to split them into network and local tests. Should make CI more consistent.
 - 1.24.* - Adds support for bankruptcy claims register parsing and querying
 - 1.23.* - Adds support for the advacned case report when it returns search results instead of a single item.
-- 1.22.* - Adds support for de_seqno values parsed from PACER RSS, dockets, docket history reports, and attachment pages.
-- 1.21.* - Adds support for the case report, which is the term we use to describe the page you see when you press the "Query" button in a district court PACER website. This is the page at the iQuery.pl URL.
+- 1.22.* - Adds support for de_seqno values parsed from PACER RSS, dockets, docket history reports, and attachment
+  pages.
+- 1.21.* - Adds support for the case report, which is the term we use to describe the page you see when you press the "
+  Query" button in a district court PACER website. This is the page at the iQuery.pl URL.
 - 1.20.* - Tweaks the API of the query method in the FreeOpinionReport object
   to consistently return None instead of sometimes returning []. Version bumped
   because of breaking API changes.
-- 1.19.* - Adds support for NextGen PACER logins, but drops support for the PACER training website. The training website now uses a different login flow than the rest of PACER.
+- 1.19.* - Adds support for NextGen PACER logins, but drops support for the PACER training website. The training website
+  now uses a different login flow than the rest of PACER.
 - 1.18.* - Adds support for appellate docket parsing!
 - 1.17.* - Adds support for criminal data in PACER
 - 1.16.* - Adds PACER RSS feed parsers.
@@ -1716,7 +2977,8 @@ Changes:
 - 1.11.* - Adds system for identifying invalid dockets in PACER.
 - 1.10.* - Better parsing for PACER attachment pages.
 - 1.9.* - Re-organization, simplification, and standardization of PACER classes.
-- 1.8.* - Standardization of string fields in PACER objects so they return the empty string when they have no value instead of returning None sometimes and the empty string others. (This follows Django conventions.)
+- 1.8.* - Standardization of string fields in PACER objects so they return the empty string when they have no value
+  instead of returning None sometimes and the empty string others. (This follows Django conventions.)
 - 1.7.* - Adds support for hidden PACER APIs.
 - 1.6.* - Adds automatic relogin code to PACER sessions, with reorganization of old login APIs.
 - 1.5.* - Adds support for querying and parsing PACER dockets.
@@ -1725,12 +2987,12 @@ Changes:
 - 1.2.* - Continued improvements.
 - 1.1.* - Major code reorganization and first release on the Python Package Index (PyPi)
 - 1.0 - Support opinions from for all possible federal bankruptcy
-   appellate panels (9th and 10th Cir.)
+  appellate panels (9th and 10th Cir.)
 - 0.9 - Supports all state courts of last resort (typically the
-   "Supreme" court)
+  "Supreme" court)
 - 0.8 - Supports oral arguments for all possible Federal Circuit
-   courts.
+  courts.
 - 0.2 - Supports opinions from all federal courts of special
-   jurisdiction (Veterans, Tax, etc.)
+  jurisdiction (Veterans, Tax, etc.)
 - 0.1 - Supports opinions from all 13 Federal Circuit courts and the
-   U.S. Supreme Court
+  U.S. Supreme Court

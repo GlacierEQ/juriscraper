@@ -11,10 +11,15 @@ History:
 """
 
 import re
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
+from juriscraper.lib.auth_utils import get_justice_dot_gov_auth_cookies
+from juriscraper.lib.exceptions import UnexpectedContentTypeError
+from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -27,7 +32,8 @@ class Site(OpinionSiteLinear):
         self.urls = None
         self.status = "Published"
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         if not self.test_mode_enabled():
             # Get last volume URL
             if not self.urls:
@@ -40,30 +46,45 @@ class Site(OpinionSiteLinear):
 
                 self.urls = sorted(urls, key=get_text, reverse=True)
             self.url = self.urls[self.volume].get("href")
-            self.html = super()._download()
+            self.html = await super()._download()
 
-        for row in self.html.xpath("//table"):
+        # Rows are sorted by date_filed descending on the source, but the
+        # source only provides the year. We use date_filed_is_approximate
+        # with the same year for every record, so without a tie-breaker CL
+        # orders them by case name. If the first few names happen to already
+        # exist, CL's DupChecker stops and never reaches newer opinions (#1934).
+        # Assign a descending approximate date starting from the middle of the
+        # year (one day apart per row) to preserve the source order and force
+        # the dup check to see newer records first.
+        for index, row in enumerate(self.html.xpath("//table")):
             summary = row.xpath("string(following-sibling::p[1])")
-            name = row.xpath(".//td[1]/*[self::strong or self::b]/text()")[0]
-            row_text = row.xpath(".//td[1]/text()")[-1]
+            name = row.xpath(".//td[1]//*[self::strong or self::b]/text()")[0]
+
+            if row.xpath(".//td[1]/text()"):
+                row_text = row.xpath(".//td[1]/text()")[-1]
+            else:
+                row_text = row.xpath(".//td[1]/p/text()")[-1]
+
             citation, year = row_text.split("(", 1)
 
             year = re.search(r"\d{4}", year).group(0)
-            url = row.xpath(".//td[2]/a/@href")
-            docket = row.xpath("string(.//td[2]/a)")
+            date = datetime(int(year), 7, 1) - timedelta(days=index)
+            url = row.xpath(".//td[2]//a/@href")
+            docket = row.xpath("string(.//td[2]//a)")
             self.cases.append(
                 {
-                    "name": name,
+                    "name": titlecase(name),
                     "citation": citation.strip(", "),
                     "url": url[0],
                     "docket": docket,
-                    "date": f"{year}-07-01",
+                    "date": date.strftime("%Y-%m-%d"),
                     "date_filed_is_approximate": True,
                     "summary": summary,
                 }
             )
 
-    def extract_from_text(self, scraped_text: str) -> dict[str, Any]:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Can we extract the date filed from the text?
 
         :param scraped_text: The content of the document downloaded
@@ -80,10 +101,32 @@ class Site(OpinionSiteLinear):
         date_filed = datetime.strptime(date[0], "%B %d, %Y").strftime(
             "%Y-%m-%d"
         )
-        metadata = {
+        metadata: ExtractedMetaData = {
             "OpinionCluster": {
                 "date_filed": date_filed,
                 "date_filed_is_approximate": False,
             },
         }
         return metadata
+
+    @override
+    async def download_content(
+        self,
+        download_url: str,
+        doctor_is_available: bool = True,
+        media_root: str = "",
+    ) -> str | bytes:
+        """Overrides regular download_content to handle the
+        "I am not a robot challenge". See #1724
+        """
+        try:
+            return await super().download_content(
+                download_url, doctor_is_available, media_root
+            )
+        except UnexpectedContentTypeError as exc:
+            # access HTML with JS variables to populate cookies
+            html_text = exc.data["response"].text
+            self.cookies = get_justice_dot_gov_auth_cookies(html_text)
+            return await super().download_content(
+                download_url, doctor_is_available, media_root
+            )

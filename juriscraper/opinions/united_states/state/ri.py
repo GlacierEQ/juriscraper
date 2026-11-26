@@ -12,8 +12,14 @@ History:
 
 from urllib.parse import quote
 
+import httpx
 from lxml import html
+from typing_extensions import override
 
+from juriscraper.AbstractSite import (
+    MissingRequestResponseException,
+    UnexpectedRequestResponseException,
+)
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -43,7 +49,9 @@ class Site(OpinionSiteLinear):
             "https://www.courts.ri.gov/_vti_bin/client.svc/ProcessQuery"
         )
 
-    def fetch_json(self) -> None:
+        self.should_have_results = True
+
+    async def fetch_json(self) -> None:
         """Fetch JSON data from the site.
 
         :return: None
@@ -57,14 +65,19 @@ class Site(OpinionSiteLinear):
         )
         self.request["headers"]["X-RequestDigest"] = request_digest
         self.request["headers"]["X-Requested-With"] = "XMLHttpRequest"
-        self._request_url_post(self.json_url)
+        await self._request_url_post(self.json_url)
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Extract content from JSON response
 
         :return: None
         """
-        self.fetch_json()
+        await self.fetch_json()
+        if self.request["response"] is None:
+            raise MissingRequestResponseException
+        if not isinstance(self.request["response"], httpx.Response):
+            raise UnexpectedRequestResponseException
         rows = self.request["response"].json()[-3][self.search_key][
             "ResultTables"
         ][0]["ResultRows"]

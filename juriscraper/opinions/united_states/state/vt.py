@@ -13,11 +13,13 @@ She's very responsive.
 
 import re
 from datetime import date, datetime
-from typing import Optional
 from urllib.parse import urlencode
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -38,10 +40,9 @@ class Site(OpinionSiteLinear):
         self.set_url()
         self.make_backscrape_iterable(kwargs)
         self.needs_special_headers = True
-        self.request["headers"] = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        }
+        self.request["headers"] = {"User-Agent": self.chrome_user_agent}
 
+    @override
     def _process_html(self) -> None:
         """Process HTML into case dictionaries
 
@@ -76,18 +77,18 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
         :param dates: (start_date, end_date) tuple
         :return None
         """
         logger.info("Backscraping for range %s %s", *dates)
         self.set_url(*dates)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
     def set_url(
-        self, start: Optional[date] = None, end: Optional[date] = None
+        self, start: date | None = None, end: date | None = None
     ) -> None:
         """Formats and sets `self.url` with date inputs
         If no start or end dates are given, scrape without date filter values
@@ -116,7 +117,8 @@ class Site(OpinionSiteLinear):
 
         self.url = f"{self.base_url}?{urlencode(params)}"
 
-    def extract_from_text(self, scraped_text: str):
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Extract a neutral citation if it exists, and update court and status
 
         Some documents have this heading:
@@ -132,7 +134,7 @@ class Site(OpinionSiteLinear):
         > This opinion is subject to motions for reargument under V.R.A.P. 40
         > as well as formal revision before publication in the Vermont Reports.
         """
-        metadata = {}
+        metadata: ExtractedMetaData = {}
         cite_regex = r"\n\s*\d{4} VT \d+\s*\n"
         match = re.search(cite_regex, scraped_text[:1000])
         if match:
@@ -146,8 +148,6 @@ class Site(OpinionSiteLinear):
             # divisions. Check test_ScraperExtractFromTextTest examples
             if "vtsuperct" in self.court_id:
                 metadata["Docket"] = {"court_id": "vt"}
-
-            return metadata
 
         non_precedential_heading = (
             "decisions of a three-justice panel are not to be considered as "
@@ -169,5 +169,50 @@ class Site(OpinionSiteLinear):
                     cluster["precedential_status"] = "Unpublished"
 
                 metadata["OpinionCluster"] = cluster
+
+        cleaned_text = "\n".join(
+            line.rsplit("}", 1)[-1] if "}" in line else line
+            for line in scraped_text[:1500].splitlines()
+        )
+
+        pattern = re.compile(
+            r"APPEALED\s+FROM:\s*(?P<lower_court>.*?)"  # non-greedy, capture all up to Case No
+            r"[.\n\r]*?"  # allow for dot, newlines, carriage returns, etc.
+            r"CASE\s+NO[S]?\.?:?\s*([\n\r]*)?"  # match CASE NO. or CASE NOS. (case-insensitive)
+            r"(?P<lower_court_number>[\w-]+)"  # the case number
+            r"(?:.*?Trial\s+Judge:\s*(?P<lower_court_judge>[^\n\r]+))?",  # optional trial judge
+            re.IGNORECASE | re.DOTALL,
+        )
+        match = pattern.search(cleaned_text)
+        if match:
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            lower_court_number = match.group("lower_court_number").strip()
+            lower_court_judge = match.group("lower_court_judge")
+            docket = metadata.setdefault("Docket", {})
+            originating_court_info = metadata.setdefault(
+                "OriginatingCourtInformation", {}
+            )
+            if lower_court:
+                docket["appeal_from_str"] = lower_court
+            if lower_court_number:
+                originating_court_info["docket_number"] = lower_court_number
+            if lower_court_judge:
+                originating_court_info["assigned_to_str"] = (
+                    lower_court_judge.strip()
+                )
+        else:
+            fall_back_pattern = re.compile(
+                r"On\s+Appeal\s+from\s*\n*\s*(?:v\.)?\s*(?P<lower_court>.+?)(?:\n{2,}|$)",
+                re.X | re.DOTALL,
+            )
+            match = fall_back_pattern.search(scraped_text[:1000])
+            if match:
+                lower_court = re.sub(
+                    r"\s+", " ", match.group("lower_court")
+                ).strip()
+                docket = metadata.setdefault("Docket", {})
+                docket["appeal_from_str"] = lower_court
 
         return metadata

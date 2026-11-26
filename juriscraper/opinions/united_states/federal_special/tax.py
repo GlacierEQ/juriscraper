@@ -4,8 +4,10 @@
 # Neutral Citation Format (Tax Court opinions): 138 T.C. No. 1 (2012)
 # Neutral Citation Format (Memorandum opinions): T.C. Memo 2012-1
 # Neutral Citation Format (Summary opinions: T.C. Summary Opinion 2012-1
-import time
+import asyncio
 from datetime import date, datetime, timedelta
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import titlecase
@@ -35,7 +37,7 @@ class Site(OpinionSiteLinear):
         }
         self.make_backscrape_iterable(kwargs)
 
-    def _download(self, request_dict=None):
+    async def _download(self, request_dict=None):
         """Download from api
 
         The tax court switches between blue and green deploys so we need to
@@ -47,10 +49,10 @@ class Site(OpinionSiteLinear):
         if request_dict is None:
             request_dict = {}
         if self.test_mode_enabled():
-            return super()._download()
+            return await super()._download()
 
         if not self.set_blue_green:
-            check = self.request["session"].get(self.url)
+            check = await self.request["session"].get(self.url)
             if check.status_code != 200:
                 self.base_url = (
                     "https://public-api-blue.dawson.ustaxcourt.gov/public-api"
@@ -58,9 +60,10 @@ class Site(OpinionSiteLinear):
                 self.url = f"{self.base_url}/opinion-search"
             self.set_blue_green = True
 
-        return super()._download()
+        return await super()._download()
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Process the JSON response
 
         Iterate over each item on the page collecting our data.
@@ -68,8 +71,10 @@ class Site(OpinionSiteLinear):
         """
         self.json = self.html
 
-        for case in self.json:
-            url = self._get_url(case["docketNumber"], case["docketEntryId"])
+        for case in self.json.get("results", []):
+            url = await self._get_url(
+                case["docketNumber"], case["docketEntryId"]
+            )
             status = (
                 "Published"
                 if case["documentType"] == "T.C. Opinion"
@@ -88,7 +93,7 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def _get_url(self, docket_number: str, docketEntryId: str) -> str:
+    async def _get_url(self, docket_number: str, docketEntryId: str) -> str:
         """Fetch the PDF URL with AWS API key
 
         param docket_number: The docket number
@@ -101,10 +106,10 @@ class Site(OpinionSiteLinear):
             # a second api request.
             return self.url
 
-        pdf_url = super()._download()["url"]
-        return pdf_url
+        html = await super()._download()
+        return html["url"]
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request to the API
 
         Note that the API returns 100 results or less, so the
@@ -115,16 +120,16 @@ class Site(OpinionSiteLinear):
         """
         self.params["startDate"] = dates[0].strftime("%m/%d/%Y")
         self.params["endDate"] = dates[1].strftime("%m/%d/%Y")
-        self._download()
+        await self._download()
         logger.info(
             "Backscraping for range %s %s\n%s cases found",
             *dates,
             len(self.json),
         )
-        self._process_html()
+        await self._process_html()
 
         # Using time.sleep to prevent rate limiting
         # {'message': 'you are only allowed 15 requests in a 60 second window time', 'type': 'ip-limiter'}
         if len(self.json) > 0:
             logger.info("Sleeping for 61 seconds to prevent rate limit")
-            time.sleep(61)
+            await asyncio.sleep(61)

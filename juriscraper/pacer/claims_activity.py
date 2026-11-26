@@ -1,6 +1,5 @@
 import re
 from datetime import date
-from typing import Union
 
 from lxml.html import HtmlElement
 
@@ -11,6 +10,7 @@ from juriscraper.lib.string_utils import (
     harmonize,
 )
 from juriscraper.lib.utils import clean_court_object
+from juriscraper.pacer.docket_report import DocketNumberComponents
 from juriscraper.pacer.reports import BaseReport
 
 from .docket_report import BaseDocketReport
@@ -29,7 +29,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
         "Security violation: You do not have access rights to this program",
     ]
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         BaseDocketReport.__init__(self, court_id)
         BaseReport.__init__(self, court_id, pacer_session)
 
@@ -46,8 +46,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
         if self.is_valid is False:
             return {}
 
-        data = self.metadata.copy()
-        return data
+        return self.metadata.copy()
 
     @property
     def metadata(self):
@@ -103,7 +102,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
 
         claim_tables = self.tree.xpath('//table[@class="complexReport"]')
         for claim_table in claim_tables:
-            meta_data = {
+            meta_data: dict = {
                 "court_id": self.court_id,
             }
             claim = {}
@@ -187,7 +186,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
     def _fill_non_present_values_as_empty(
         self,
         field_mappings: dict[str, str],
-        meta_data: dict[str, Union[str, date, None, list[dict[str, str]]]],
+        meta_data: dict[str, str | date | None | list[dict[str, str]]],
     ) -> None:
         """Fill claim missing values in meta_data with empty values if they are
         not present.
@@ -199,14 +198,14 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
 
         for value in field_mappings.values():
             if value not in meta_data:
-                if value.startswith("date_") or value.startswith("last_date_"):
+                if value.startswith(("date_", "last_date_")):
                     meta_data[value] = None
                 else:
                     meta_data[value] = ""
 
     def _parse_case_name_and_docket_number(
         self,
-        meta_data: dict[str, Union[str, date, None, list[dict[str, str]]]],
+        meta_data: dict[str, str | date | None | list[dict[str, str]]],
         claim_table: HtmlElement,
     ) -> None:
         """Parses the case name and docket number from the provided meta_data
@@ -223,21 +222,33 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
             docket_number, docket_number_components = (
                 self._parse_docket_number(docket_number)
             )
-            meta_data["docket_number"] = docket_number
-            # Include the docket_number components.
-            meta_data.update(docket_number_components)
         else:
             docket_number = claim_table.xpath("(.//tr)[1]/td[1]/a//text()")[0]
             docket_number, docket_number_components = (
                 self._parse_docket_number(docket_number)
             )
-            meta_data["docket_number"] = docket_number
-            # Include the docket_number components.
-            meta_data.update(docket_number_components)
+
+        meta_data["docket_number"] = docket_number
+        # Include the docket_number components.
+        meta_data["federal_dn_office_code"] = docket_number_components[
+            "federal_dn_office_code"
+        ]
+        meta_data["federal_dn_case_type"] = docket_number_components[
+            "federal_dn_case_type"
+        ]
+        meta_data["federal_dn_judge_initials_assigned"] = (
+            docket_number_components["federal_dn_judge_initials_assigned"]
+        )
+        meta_data["federal_dn_judge_initials_referred"] = (
+            docket_number_components["federal_dn_judge_initials_referred"]
+        )
+        meta_data["federal_defendant_number"] = docket_number_components[
+            "federal_defendant_number"
+        ]
 
     def _parse_docket_number(
         self, docket_number: str
-    ) -> tuple[str, dict[str, Union[str, None]]]:
+    ) -> tuple[str, DocketNumberComponents]:
         """Strip the judge initials off docket numbers, and do any other
         similar cleanup.
 
@@ -266,7 +277,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
 
     def _get_claim_data_from_anchors(
         self, anchor_nodes: list[HtmlElement]
-    ) -> dict[str, Union[str, list[dict[str, str]]]]:
+    ) -> dict[str, str | list[dict[str, str]]]:
         """Retrieves claim data from a list of HTML anchor elements.
 
         :param anchor_nodes: A list of HTML anchor elements that contain
@@ -313,36 +324,33 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
         return claim
 
     @staticmethod
-    def get_pacer_claim_id_from_claim_url(url: str) -> Union[str, None]:
+    def get_pacer_claim_id_from_claim_url(url: str) -> str | None:
         """Extract the caseid from the doc1 URL."""
         match = re.search(r"claim_id=(\d+)", url)
         if match:
             return match.group(1)
-        else:
-            return None
+        return None
 
     @staticmethod
-    def get_claim_number_from_claim_url(url: str) -> Union[str, None]:
+    def get_claim_number_from_claim_url(url: str) -> str | None:
         """Extract the caseid from the doc1 URL."""
         match = re.search(r"claim_num=(\d+-\d+)", url)
         if match:
             return match.group(1)
-        else:
-            return None
+        return None
 
     @staticmethod
-    def get_claim_doc_seq_from_claim_url(url: str) -> Union[str, None]:
+    def get_claim_doc_seq_from_claim_url(url: str) -> str | None:
         """Extract the caseid from the doc1 URL."""
         match = re.search(r"claim_doc_seq=(\d+)", url)
         if match:
             return match.group(1)
-        else:
-            return None
+        return None
 
     @staticmethod
     def _get_label_value_pair_from_string(
         string: str, field_mappings: dict[str, str]
-    ) -> dict[str, Union[str, date, None]]:
+    ) -> dict[str, str | date | None]:
         """Get the field name and value from a string.
 
         e.g: Case: 3:23-bk-10722
@@ -376,7 +384,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
 
         value = value.strip()
         value = value.lstrip(":").strip()
-        if label.startswith("date_") or label.startswith("last_date_"):
+        if label.startswith(("date_", "last_date_")):
             if value:
                 data = {label: convert_date_string(value)}
             else:
@@ -385,13 +393,13 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
             data = {label: force_unicode(value)}
         return data
 
-    def query(
+    async def query(
         self,
         pacer_case_id: str,
         docket_number: str,
         creditor_name: str,
-        date_start: date = None,
-        date_end: date = None,
+        date_start: date | None = None,
+        date_end: date | None = None,
     ):
         """Query the claims activity and return the results.
 
@@ -404,7 +412,8 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
         :param date_end: The latest claim entry you with to have. Default is
         tomorrow.
 
-        :return: request response object
+        :return None: Instead, sets self.response attribute and runs
+        self.parse()
         """
         assert self.session is not None, (
             "session attribute of ClaimsActivity cannot be None."
@@ -447,7 +456,7 @@ class ClaimsActivity(BaseDocketReport, BaseReport):
         else:
             post_param = "1-L_1_0-1"
 
-        self.response = self.session.post(
+        self.response = await self.session.post(
             f"{self.url}?{post_param}", data=params
         )
         self.parse()

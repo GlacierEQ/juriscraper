@@ -6,29 +6,40 @@ History:
     - 2014-09-21: Updated by Jon Andersen to handle some fields being missing
     - 2014-08-05: Updated to have a dynamic URL, an oversight during check in.
     - 2022-01-28: Updated for new web site, @satsuki-chan.
+    - 2026-02-25: Added backscraping support going back to December 2000.
 """
 
 import re
-from urllib.parse import urlencode
+from datetime import date, datetime
+from urllib.parse import urlencode, urljoin
 
-from juriscraper.DeferringList import DeferringList
+from typing_extensions import override
+
+from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
 class Site(OpinionSiteLinear):
+    title_re = re.compile(
+        r"(MSC|COA) (?P<docket>\d{6})\s+(?P<name>.+)\s+Opinion"
+    )
+    court = "Supreme Court"
+    days_interval = 10
+    first_opinion_date = datetime(2000, 12, 12)
+    filters = (
+        ("releaseDate", "Past Year"),
+        ("page", "1"),
+        ("sortOrder", "Newest"),
+        ("searchQuery", ""),
+        ("resultType", "opinions"),
+        ("pageSize", "100"),
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.court_id = self.__module__
-        self.filters = (
-            ("releaseDate", "Past Year"),
-            ("page", "1"),
-            ("sortOrder", "Newest"),
-            ("searchQuery", ""),
-            ("resultType", "opinions"),
-            ("pageSize", "100"),
-        )
-        self.court = "Supreme Court"
         params = self.filters + (
             ("resource", "supreme-court-opinion"),
             ("aAppellateCourt", self.court),
@@ -36,60 +47,49 @@ class Site(OpinionSiteLinear):
         self.url = f"https://www.courts.michigan.gov/api/CaseSearch/SearchCaseOpinions?{urlencode(params)}"
         # Currently blocked from Michigan so we drop the user agent for now
         self.request["headers"] = {"User-Agent": ""}
-        self.title_re = r"(MSC|COA) (?P<docket>\d+)\s+(?P<name>.+)\s+Opinion"
-        self.status = "Published"
-        self.cases = []
+        self.make_backscrape_iterable(kwargs)
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Process the html and extract out the opinions
 
         :return: None
         """
         for item in self.html["searchItems"]:
-            match = re.search(self.title_re, item["title"])
-            if match:
-                docket = match.group("docket")
-                name = self.cleanup_case_name(match.group("name"))
-            else:
-                # In some cases the case name is missing. Grab the docket from the title in a different manner
-                docket = item["title"].split("_")[0]
-                name = ""
-            self.cases.append(
-                {
-                    "date": item["filingDate"],
-                    "docket": docket,
-                    "name": name,
-                    "url": f"https://www.courts.michigan.gov{item['documentUrl'].strip()}",
-                    "lower_court": self.get_lower_courts(item["courts"]),
-                    "title": item["title"],
-                }
-            )
+            self.cases.append(await self._extract_case_data_from_item(item))
 
-    def _get_case_names(self) -> list[str]:
-        """Get case names *if* missing
+    async def _extract_case_data_from_item(self, item: dict) -> dict:
+        """Extract the case data from the item
 
-        In some cases the case name is missing. This method uses a deferred list to the get the case name.
-
-        :return: List of case names
+        :param item: The item from the API
+        :return: The case data
         """
+        if match := self.title_re.search(item["title"]):
+            docket = match.group("docket")
+            name = self.cleanup_case_name(match.group("name"))
+        else:
+            name, docket = await self.get_missing_name_and_docket(item)
 
-        def fetcher(case):
-            if case["name"] != "":
-                # Return the name we extracted without using fetcher
-                return case["name"]
-            elif self.test_mode_enabled():
-                # if we're in test mode, return a dummy name
-                return "Test Name"
-            else:
-                # Else, query the API and return the name of the case
-                self.url = f"https://www.courts.michigan.gov/api/CaseSearch/SearchCaseSearchContent/?searchQuery={case['title']}"
-                self.html = self._download()
-                case["name"] = self.html["opinionResults"]["searchItems"][0][
-                    "title"
-                ].title()
-            return case["name"]
+        disposition = self.get_disposition(item)
 
-        return DeferringList(seed=self.cases, fetcher=fetcher)
+        status = "Published"
+        if "Unpublished" in item["title"]:
+            status = "Unpublished"
+
+        per_curiam = False
+        if "per curiam" in item["title"].lower():
+            per_curiam = True
+
+        return {
+            "date": item["filingDate"],
+            "docket": docket,
+            "name": name,
+            "url": urljoin(self.url, item["documentUrl"].strip()),
+            "lower_court": self.parse_lower_courts(item["courts"]),
+            "status": status,
+            "per_curiam": per_curiam,
+            "disposition": disposition,
+        }
 
     def cleanup_case_name(self, name_raw: str) -> str:
         """Clean up case name in Michigan
@@ -97,19 +97,83 @@ class Site(OpinionSiteLinear):
         :param name_raw: Raw title string
         :return: Cleaned name
         """
-        name = titlecase(name_raw)
-        if "People of Mi " in name:
-            name = name.replace("People of Mi ", "People of Michigan ")
-        return name
+        name = titlecase(re.sub(r"\s+", " ", name_raw.strip()))
+        return name.replace("People of Mi ", "People of Michigan ")
 
-    def get_lower_courts(self, courts: list[str]) -> str:
+    def parse_lower_courts(self, courts: list | None) -> str:
         """Get the lower courts
 
         :param courts: Court names as an array
         :return: The lower courts combined into a string
         """
-        if courts:
-            lower_courts = ", ".join(courts).lstrip(", ")
-        else:
-            lower_courts = ""
+        if not courts:
+            return ""
+        lower_courts = re.sub(r"\s+", " ", ", ".join(courts).lstrip(", "))
         return titlecase(lower_courts)
+
+    async def get_missing_name_and_docket(self, item: dict) -> tuple[str, str]:
+        """
+        Return 2 placeholders. We can get the values via `extract_from_text`
+        To be overriden in `michctapp`
+        Sometimes the API returns bad "title" values. See #1648
+        """
+        return "Placeholder case name", "Placeholder docket number"
+
+    def get_disposition(self, item: dict) -> str:
+        """To be overriden by michctapp"""
+        return ""
+
+    def _build_backscrape_url(self, dates: tuple[date, date]) -> str:
+        """Build URL for backscraping with a custom date range.
+
+        :param dates: (start_date, end_date) tuple
+        :return: URL string
+        """
+        from_date = dates[0].strftime("%m/%d/%Y")
+        to_date = dates[1].strftime("%m/%d/%Y")
+        params = (
+            ("releaseDate", f"Custom Range:{from_date}:{to_date}"),
+            ("page", "1"),
+            ("sortOrder", "Newest"),
+            ("searchQuery", ""),
+            ("resultType", "opinions"),
+            ("pageSize", "100"),
+            ("aAppellateCourt", self.court),
+        )
+        return f"https://www.courts.michigan.gov/api/CaseSearch/SearchCaseOpinions?{urlencode(params)}"
+
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
+        """Download opinions for a specific date range.
+
+        :param dates: (start_date, end_date) tuple from make_backscrape_iterable
+        :return: None
+        """
+        logger.info("Backscraping for range %s %s", *dates)
+        self.url = self._build_backscrape_url(dates)
+        self.html = await self._download()
+        await self._process_html()
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extracts case names and docket numbers from the document's text
+
+        :param scraped_text: the document's text
+        :return: a dictionary in the shape of Courtlistener's models
+        """
+        pattern = re.compile(
+            r"(?P<case_name>([\S ]+\n)+)\n+\s+Docket Nos?. (?P<docket_number>(\d{6}(,? and |, |.)?)+)"
+        )
+        if match := pattern.search(scraped_text[:1500]):
+            docket_number = match.group("docket_number").strip(" .")
+            name = self.cleanup_case_name(
+                match.group("case_name").replace("\n", ";")
+            ).strip("; ")
+            return {
+                "OpinionCluster": {"case_name": name},
+                "Docket": {"case_name": name, "docket_number": docket_number},
+            }
+        logger.error(
+            "mich: extract_from_text failed",
+            extra={"opinion_text": scraped_text[:1024].strip()},
+        )
+        return {}

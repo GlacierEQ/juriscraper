@@ -19,7 +19,6 @@ class Site(OralArgumentSite):
         self.court_id = self.__module__
         self.url = "http://court-url.gov/some-path.html"
         self.method = "POST"
-        self.uses_selenium = False
         # Complete this variable if you create a backscraper.
         self.back_scrape_iterable = None
 
@@ -83,19 +82,19 @@ class Site(OralArgumentSite):
         """
         This is typically of the form ##-####
         """
-        return None
+        return
 
     def _get_judges(self):
         """
         For the name of the judge authoring the lead opinion
         """
-        return None
+        return
 
     """
       Optional method used for downloading multiple pages of a court site.
     """
 
-    def _download_backwards(self, date_str):
+    async def _download_backwards(self, date_str):
         """This is a simple method that can be used to generate Site objects
         that can be used to paginate through a court's entire website.
 
@@ -112,4 +111,4 @@ class Site(OralArgumentSite):
         development.
         """
         self.url = f"http://example.com/new/url/{date_str}"
-        self.html = self._download()
+        self.html = await self._download()

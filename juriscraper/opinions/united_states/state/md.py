@@ -9,6 +9,8 @@ Court Support: webmaster@mdcourts.gov, mdlaw.library@mdcourts.gov
 
 from datetime import date
 
+from typing_extensions import override
+
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -21,13 +23,14 @@ class Site(OpinionSiteLinear):
     no_judge_strings = {"Order", "PC Order", "Per Curiam"}
 
     def __init__(self, *args, **kwargs):
+        kwargs.setdefault("verify", False)
         super().__init__(*args, **kwargs)
         self.url = self.base_url.format(self.court, self.current_year)
         self.court_id = self.__module__
-        self.disable_certificate_verification()
         self.status = "Published"
         self.make_backscrape_iterable(kwargs)
 
+    @override
     def _process_html(self) -> None:
         """Parse HTML into case dictionaries
 
@@ -66,6 +69,7 @@ class Site(OpinionSiteLinear):
                 }
             )
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
         by caller, and parses them accordingly
@@ -82,12 +86,12 @@ class Site(OpinionSiteLinear):
 
         self.back_scrape_iterable = range(start, end)
 
-    def _download_backwards(self, year: int) -> None:
+    async def _download_backwards(self, year: int) -> None:
         """Build URL with year input and scrape
 
         :param year: year to scrape
         :return None
         """
         self.url = self.base_url.format(self.court, year)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

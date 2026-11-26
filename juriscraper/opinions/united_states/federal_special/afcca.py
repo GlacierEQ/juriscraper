@@ -8,6 +8,8 @@ History:
 
 from datetime import date
 
+from typing_extensions import override
+
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -16,13 +18,14 @@ class Site(OpinionSiteLinear):
     start_year = 2002
 
     def __init__(self, *args, **kwargs):
+        kwargs.setdefault("verify", False)
         super().__init__(*args, **kwargs)
         self.court_id = self.__module__
         self.current_year = date.today().year
         self.make_backscrape_iterable(kwargs)
         self.url = self.base_url.format(self.current_year)
-        self.disable_certificate_verification()
 
+    @override
     def _process_html(self) -> None:
         for row in self.html.xpath(".//img[contains(@src, 'pdf.gif')]/../..")[
             :-1
@@ -40,16 +43,17 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def _download_backwards(self, year: int) -> None:
+    async def _download_backwards(self, year: int) -> None:
         """Build URL with year input and scrape
 
         :param year: year to scrape
         :return None
         """
         self.url = self.base_url.format(year)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
         by caller, and parses them accordingly

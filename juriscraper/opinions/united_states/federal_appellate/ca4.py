@@ -2,6 +2,7 @@ import re
 from datetime import date, datetime
 
 from dateutil.relativedelta import relativedelta
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
@@ -27,7 +28,8 @@ class Site(OpinionSiteLinear):
         self.update_parameters()
         self.make_backscrape_iterable(kwargs)
 
-    def make_backscrape_iterable(self, kwargs: dict[str, str]) -> None:
+    @override
+    def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Make back scrape iterable
 
         :param kwargs: the back scraping params
@@ -49,6 +51,7 @@ class Site(OpinionSiteLinear):
 
         self.back_scrape_iterable = date_ranges
 
+    @override
     def _process_html(self) -> None:
         """Process CA4 Opinions
 
@@ -140,7 +143,7 @@ class Site(OpinionSiteLinear):
             "sortBy": "2",  # 2 -> newest to oldest
         }
 
-    def _download_backwards(self, date_range) -> None:
+    async def _download_backwards(self, date_range) -> None:
         """Download backward
 
         :param date_range: the date range as a string
@@ -148,5 +151,5 @@ class Site(OpinionSiteLinear):
         """
         self.date_range = date_range
         self.update_parameters()
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

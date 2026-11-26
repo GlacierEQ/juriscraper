@@ -1,12 +1,12 @@
 import copy
+import pathlib
 import pprint
 import re
 import sys
-from typing import Optional, Union
+from datetime import date, datetime
+from typing import Literal, TypedDict, overload
 
 from dateutil.tz import gettz
-from lxml import etree
-from lxml.etree import _ElementUnicodeResult
 from lxml.html import HtmlElement, fromstring, tostring
 
 from juriscraper.lib.judge_parsers import normalize_judge_string
@@ -29,6 +29,14 @@ from .utils import (
 )
 
 logger = make_default_logger()
+
+
+class DocketNumberComponents(TypedDict):
+    federal_dn_office_code: str | None
+    federal_dn_case_type: str | None
+    federal_dn_judge_initials_assigned: str | None
+    federal_dn_judge_initials_referred: str | None
+    federal_defendant_number: str | None
 
 
 class BaseDocketReport:
@@ -56,7 +64,7 @@ class BaseDocketReport:
     docket_number_jpml = re.compile(r"(MDL No.\s+\d*)")
     docket_number_appellate_regex = re.compile(r"(\d\d-\d+)")
 
-    def __init__(self, court_id):
+    def __init__(self, court_id: str):
         self.court_id = court_id
         if self.court_id.endswith("b"):
             self.is_bankruptcy = True
@@ -134,7 +142,26 @@ class BaseDocketReport:
                     atty_cache[atty["name"]] = atty["contact"]
         return parties
 
-    def _get_value(self, regex, query_strings, cast_to_date=False):
+    @overload
+    def _get_value(
+        self,
+        regex: re.Pattern[str],
+        query_strings: list[str] | str,
+        cast_to_date: Literal[True],
+    ) -> date | None: ...
+    @overload
+    def _get_value(
+        self,
+        regex: re.Pattern[str],
+        query_strings: list[str] | str,
+        cast_to_date: Literal[False] = ...,
+    ) -> str: ...  # Note: empty string is sent instead of `None`
+    def _get_value(
+        self,
+        regex: re.Pattern[str],
+        query_strings: list[str] | str,
+        cast_to_date: bool = False,
+    ) -> str | date | None:
         """Find the matching value for a regex.
 
         Iterate over a list of values and return group(1) for the first that
@@ -158,11 +185,10 @@ class BaseDocketReport:
 
         if cast_to_date:
             return None
-        else:
-            return ""
+        return ""
 
     @staticmethod
-    def _xpath_text_0(node, xpath):
+    def _xpath_text_0(node, xpath) -> str:
         """Get the first text element from a node or return ''
 
         This is annoyingly hard with normal xpath.
@@ -172,7 +198,7 @@ class BaseDocketReport:
         except IndexError:
             return ""
 
-    def _get_str_from_tree(self, path):
+    def _get_str_from_tree(self, path) -> str:
         try:
             s = self.tree.xpath(f"{path}/text()")[0].strip()
         except IndexError:
@@ -181,7 +207,7 @@ class BaseDocketReport:
             return s
 
     @staticmethod
-    def _return_default_dn_components() -> dict[str, Union[str, None]]:
+    def _return_default_dn_components() -> DocketNumberComponents:
         """Return a dictionary with default values for the docket_number
         components to return on non-valid docket_numbers.
 
@@ -198,7 +224,7 @@ class BaseDocketReport:
 
     def _parse_dn_components(
         self, potential_docket_number
-    ) -> dict[str, Union[str, None]]:
+    ) -> DocketNumberComponents:
         """Parse the potential docket number into its components.
 
         :param potential_docket_number: The docket number string to be parsed.
@@ -276,8 +302,8 @@ class BaseDocketReport:
         return self._return_default_dn_components()
 
     def _parse_docket_number_strs(
-        self, potential_docket_numbers: list[_ElementUnicodeResult]
-    ) -> tuple[Union[str, None], dict[str, Union[str, None]]]:
+        self, potential_docket_numbers: list[str]
+    ) -> tuple[str | None, DocketNumberComponents]:
         """Parse docket numbers from a list of potential ones. Also parse
         the docket number components.
 
@@ -309,7 +335,17 @@ class BaseDocketReport:
 
         return None, self._return_default_dn_components()
 
-    def get_datetime_from_tree(self, path, cast_to_date=False):
+    @overload
+    def get_datetime_from_tree(
+        self, path: str, cast_to_date: Literal[True]
+    ) -> date | None: ...
+    @overload
+    def get_datetime_from_tree(
+        self, path: str, cast_to_date: Literal[False] = ...
+    ) -> datetime | None: ...
+    def get_datetime_from_tree(
+        self, path: str, cast_to_date: bool = False
+    ) -> datetime | date | None:
         """Parse a datetime from the XML located at node.
 
         If cast_to_date is true, the datetime object will be converted to a
@@ -324,7 +360,7 @@ class BaseDocketReport:
             try:
                 d = convert_date_string(s, datetime=True)
             except ValueError:
-                logger.debug(f"Couldn't parse date: {s}")
+                logger.debug("Couldn't parse date: %s", s)
                 return None
             else:
                 # Set it to UTC.
@@ -498,7 +534,7 @@ class DocketReport(BaseDocketReport, BaseReport):
         "Submission already made, please wait for response from server",
     ]
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         BaseDocketReport.__init__(self, court_id)
         BaseReport.__init__(self, court_id, pacer_session)
 
@@ -579,7 +615,7 @@ class DocketReport(BaseDocketReport, BaseReport):
 
         self._set_metadata_values()
         docket_number, docket_number_components = self._parse_docket_number()
-        data = {
+        data: dict = {
             "court_id": self.court_id,
             "docket_number": docket_number,
             "case_name": self._get_case_name(),
@@ -775,7 +811,7 @@ class DocketReport(BaseDocketReport, BaseReport):
             return True
         return False
 
-    def _get_party_type(self, row, cells, party):
+    def _get_party_type(self, row, cells, party: dict) -> tuple[dict, bool]:
         """Get the party type info and return it as a dict.
 
         :param row: The tr we're currently processing.
@@ -791,26 +827,26 @@ class DocketReport(BaseDocketReport, BaseReport):
             # Regular docket - party type value.
             s = force_unicode(cells[0].text_content())
             return {"type": normalize_party_types(s)}, True
-        elif "------" in row_text:
+        if "------" in row_text:
             # Adversary proceeding
             s = force_unicode(cells[0].text_content().strip())
             if len(cells) == 1:
                 s = re.sub("----*", "", s)
                 return {"type": normalize_party_types(s)}, True
-            elif len(cells) == 3:
+            if len(cells) == 3:
                 # Some courts have malformed HTML that requires extra work.
                 return {"type": re.split("----*", s)[0]}, False
-        elif all(
+            raise ValueError("Unrecognizable party row")
+        if all(
             [self.is_bankruptcy, len(cells) == 3, cells[0].xpath(".//i/b")]
         ):
             # Bankruptcy - party type value.
             s = force_unicode(cells[0].xpath(".//i")[0].text_content())
             return {"type": normalize_party_types(s)}, False
-        elif len(cells) == 3 and "service list" in row_text:
+        if len(cells) == 3 and "service list" in row_text:
             # Special case to handle the service list.
             return {"type": "Service List"}, False
-        else:
-            return party, False
+        return party, False
 
     def _add_criminal_data_to_parties(self, parties, party_rows):
         """Iterate over the party rows, identify criminal data, and add it.
@@ -842,13 +878,13 @@ class DocketReport(BaseDocketReport, BaseReport):
         # Because criminal data spans multiple trs, the way we do this is by
         # keeping track of which party we're currently working on. Then, when
         # we get useful criminal data, we add it to that party.
-        empty_criminal_data = {
+        empty_criminal_data: dict = {
             "counts": [],
             "complaints": [],
             "highest_offense_level_opening": "",
             "highest_offense_level_terminated": "",
         }
-        section_info = {
+        section_info: dict = {
             "current_section": None,
             "header_info": None,
             "changed": False,
@@ -1063,7 +1099,7 @@ class DocketReport(BaseDocketReport, BaseReport):
             path = "./following-sibling::* | ./following-sibling::text()"
             for _prev, node, nxt in previous_and_next(atty_node.xpath(path)):
                 # noinspection PyProtectedMember
-                if isinstance(node, etree._ElementUnicodeResult):
+                if isinstance(node, str):
                     clean_atty = "%s\n" % " ".join(
                         n.strip() for n in node.split()
                     )
@@ -1088,7 +1124,7 @@ class DocketReport(BaseDocketReport, BaseReport):
 
         return attorneys
 
-    def _get_docket_entries_order(self) -> Optional[str]:
+    def _get_docket_entries_order(self) -> str | None:
         """Get the order of entries in the docket sheet."""
 
         docket_entry_all_rows = self._get_docket_entry_rows()
@@ -1119,14 +1155,13 @@ class DocketReport(BaseDocketReport, BaseReport):
             'selected documents")])'
         )
         footer_multi_doc = 'not(.//text()[contains(., "Footer format:")])'
-        docket_entry_all_rows = self.tree.xpath(
+        return self.tree.xpath(
             "//table"
             f"[preceding-sibling::table[{docket_header}] or {docket_header}]"
             f"[{bankr_multi_doc}]"
             f"[{footer_multi_doc}]"
             "/tbody/tr"
         )
-        return docket_entry_all_rows
 
     def _get_attachment_number(self, row):
         """Return the attachment number for an item.
@@ -1135,8 +1170,7 @@ class DocketReport(BaseDocketReport, BaseReport):
         you must extract it, then subtract 1 from the value since these are
         tallied and include the main document.
         """
-        number = int(row.xpath(".//td/text()")[0].strip())
-        return number
+        return int(row.xpath(".//td/text()")[0].strip())
 
     def _get_description_from_tr(self, row):
         """Get the description from the row"""
@@ -1158,7 +1192,7 @@ class DocketReport(BaseDocketReport, BaseReport):
         return force_unicode(description)
 
     @staticmethod
-    def _get_de_arr_de_seq_nums_sequence(td):
+    def _get_de_arr_de_seq_nums_sequence(td) -> str | None:
         """Get the docket entry row sequence number."""
         try:
             input = td.xpath(".//input[@name='arr_de_seq_nums']")[0]
@@ -1177,7 +1211,7 @@ class DocketReport(BaseDocketReport, BaseReport):
             return value
 
     @staticmethod
-    def _get_attachment_id_value_from_tr(tr, idx):
+    def _get_attachment_id_value_from_tr(tr, idx) -> str | None:
         """Take a row from the attachment table and return the id value by
         index.
         """
@@ -1202,6 +1236,7 @@ class DocketReport(BaseDocketReport, BaseReport):
         count = get_input_value_from_tr(tr, 2, 3, "-")
         if count is not None:
             return int(count)
+        return None
 
     @staticmethod
     def _get_page_count_from_tr(tr):
@@ -1225,6 +1260,7 @@ class DocketReport(BaseDocketReport, BaseReport):
                 # word "page" and gets caught by the xpath. Just
                 # press on.
                 continue
+        return None
 
     @staticmethod
     def _get_file_size_bytes_from_tr(tr):
@@ -1269,7 +1305,7 @@ class DocketReport(BaseDocketReport, BaseReport):
         return f"{self.doc_id_prefix}0{pacer_doc_suffix}"
 
     @staticmethod
-    def _get_pacer_seq_no_from_tr(row):
+    def _get_pacer_seq_no_from_tr(row) -> str | None:
         """Take a row of the attachment table, and return the sequence number
         from the name attribute.
         """
@@ -1316,7 +1352,7 @@ class DocketReport(BaseDocketReport, BaseReport):
         return result
 
     @staticmethod
-    def _de_matches_attachment(de, attachment):
+    def _de_matches_attachment(de, attachment) -> bool:
         return (
             de["pacer_doc_id"] == attachment["pacer_doc_id"]
             and de["pacer_seq_no"] == attachment["pacer_seq_no"]
@@ -1359,7 +1395,7 @@ class DocketReport(BaseDocketReport, BaseReport):
             view_multiple_documents = True
         docket_entries = []
         for row in docket_entry_rows:
-            de = {}
+            de: dict = {}
             cells = row.xpath("./td[not(./input)]")
 
             # If view_multiple_documents report, remove the "checkbox" cell on
@@ -1449,21 +1485,21 @@ class DocketReport(BaseDocketReport, BaseReport):
         self._is_adversary_proceeding = adversary_proceeding
         return adversary_proceeding
 
-    def query(
+    async def query(
         self,
-        pacer_case_id,
-        date_range_type="Filed",
-        date_start=None,
-        date_end=None,
-        doc_num_start="",
-        doc_num_end="",
-        show_parties_and_counsel=False,
-        show_terminated_parties=False,
-        show_list_of_member_cases=False,
-        include_pdf_headers=True,
-        show_multiple_docs=False,
-        output_format="html",
-        order_by="date",
+        pacer_case_id: str,
+        date_range_type: Literal["Filed", "Entered"] = "Filed",
+        date_start: date | None = None,
+        date_end: date | None = None,
+        doc_num_start: str | int | None = None,
+        doc_num_end: str | int | None = None,
+        show_parties_and_counsel: bool = False,
+        show_terminated_parties: bool = False,
+        show_list_of_member_cases: bool = False,
+        include_pdf_headers: bool = True,
+        show_multiple_docs: bool = False,
+        output_format: Literal["html", "pdf"] = "html",
+        order_by: Literal["date", "-date", "document_number"] = "date",
     ):
         """Query the docket report and return the results.
 
@@ -1503,11 +1539,11 @@ class DocketReport(BaseDocketReport, BaseReport):
         if output_format not in ["html", "pdf"]:
             raise ValueError("Invalid value for 'output_format' parameter.")
         if order_by == "date":
-            order_by = "oldest date first"
+            order_by_arg = "oldest date first"
         elif order_by == "-date":
-            order_by = "most recent date first"
+            order_by_arg = "most recent date first"
         elif order_by == "document_number":
-            order_by = "document number"
+            order_by_arg = "document number"
         else:
             raise ValueError("Invalid value for 'order_by' parameter.")
 
@@ -1517,9 +1553,9 @@ class DocketReport(BaseDocketReport, BaseReport):
                 "counsel are not also requested."
             )
 
-        query_params = {
+        query_params: dict[str, str] = {
             "all_case_ids": pacer_case_id,
-            "sort1": order_by,
+            "sort1": order_by_arg,
             "date_range_type": date_range_type,
             "output_format": output_format,
             # Any value works in this parameter, but it cannot be blank.
@@ -1558,11 +1594,12 @@ class DocketReport(BaseDocketReport, BaseReport):
             query_params["view_multi_docs"] = "on"
 
         logger.info(
-            "Querying docket report for case ID '%s' with params %s"
-            % (pacer_case_id, query_params)
+            "Querying docket report for case ID '%s' with params %s",
+            pacer_case_id,
+            query_params,
         )
 
-        self.response = self.session.post(
+        self.response = await self.session.post(
             f"{self.url}?1-L_1_0-1", data=query_params
         )
         self.parse()
@@ -1590,21 +1627,20 @@ class DocketReport(BaseDocketReport, BaseReport):
     def _get_pacer_doc_id_and_seq_no(cell, document_number):
         if not document_number:
             return None, None
-        else:
-            # We find the first link having the document number as text.
-            # This is needed because txnb combines the second and third
-            # column in their docket report.
-            anchors = cell.xpath(".//a")
-            if len(anchors) == 0:
-                # Docket entry exists, but cannot download document (it's
-                # sealed, a minute entry, or otherwise unavailable in PACER).
-                return None, None
-            for anchor in anchors:
-                if anchor.text_content().strip() == document_number:
-                    doc1_url = anchor.xpath("./@href")[0]
-                    pacer_doc_id = get_pacer_doc_id_from_doc1_url(doc1_url)
-                    pacer_seq_no = get_pacer_seq_no_from_doc1_anchor(anchor)
-                    return pacer_doc_id, pacer_seq_no
+        # We find the first link having the document number as text.
+        # This is needed because txnb combines the second and third
+        # column in their docket report.
+        anchors = cell.xpath(".//a")
+        if len(anchors) == 0:
+            # Docket entry exists, but cannot download document (it's
+            # sealed, a minute entry, or otherwise unavailable in PACER).
+            return None, None
+        for anchor in anchors:
+            if anchor.text_content().strip() == document_number:
+                doc1_url = anchor.xpath("./@href")[0]
+                pacer_doc_id = get_pacer_doc_id_from_doc1_url(doc1_url)
+                pacer_seq_no = get_pacer_seq_no_from_doc1_anchor(anchor)
+                return pacer_doc_id, pacer_seq_no
 
         # In case none of our URLs can be parsed.
         return None, None
@@ -1661,17 +1697,17 @@ class DocketReport(BaseDocketReport, BaseReport):
         # noinspection PyUnboundLocalVariable
         return desc
 
-    def _get_case_name(self):
+    def _get_case_name(self) -> str:
         if self.is_bankruptcy:
             # Check if there is somebody described as a debtor
             try:
-                return [
+                return next(
                     p
                     for p in self.parties
                     if p["type"] == "Debtor"
                     or p["type"] == "Debtor In Possession"
-                ][0]["name"]
-            except IndexError:
+                )["name"]
+            except StopIteration:
                 pass
 
             # This is probably a sub docket to a larger case. Use that title.
@@ -1715,7 +1751,7 @@ class DocketReport(BaseDocketReport, BaseReport):
 
     def _parse_docket_number(
         self,
-    ) -> tuple[Union[str, None], dict[str, Union[str, None]]]:
+    ) -> tuple[str | None, DocketNumberComponents]:
         """Parse a valid docket number and its components.
 
         :return: A two-tuple: the docket_number and a dict containing the
@@ -1746,21 +1782,19 @@ class DocketReport(BaseDocketReport, BaseReport):
                 if len(cell_texts) > 1:
                     nos.append(" ".join(cell_texts))
             return "; ".join(nos) or ""
-        else:
-            return self._get_value(self.nos_regex, self.metadata_values)
+        return self._get_value(self.nos_regex, self.metadata_values)
 
     def _get_judge(self, regex):
         judge_regex = re.compile(regex, flags=re.DOTALL | re.IGNORECASE)
         judge_str = self._get_value(judge_regex, self.metadata_values)
         if judge_str:
             return normalize_judge_string(judge_str)[0]
-        else:
-            # No luck getting it in the metadata_values attribute. Broaden
-            # the search to look in the entire docket HTML.
-            text_nodes = self.tree.xpath("//text()")
-            text_nodes = [t for t in text_nodes if t and not t.isspace()]
-            judge_str = self._get_value(judge_regex, text_nodes)
-            return normalize_judge_string(judge_str)[0]
+        # No luck getting it in the metadata_values attribute. Broaden
+        # the search to look in the entire docket HTML.
+        text_nodes = self.tree.xpath("//text()")
+        text_nodes = [t for t in text_nodes if t and not t.isspace()]
+        judge_str = self._get_value(judge_regex, text_nodes)
+        return normalize_judge_string(judge_str)[0]
 
 
 if __name__ == "__main__":
@@ -1771,7 +1805,7 @@ if __name__ == "__main__":
     report = DocketReport("cand")  # Court ID is only needed for querying.
     filepath = sys.argv[1]
     print(f"Parsing HTML file at {filepath}")
-    with open(filepath) as f:
+    with pathlib.Path(filepath).open() as f:
         text = f.read()
     report._parse_text(text)
     pprint.pprint(report.data, indent=2)

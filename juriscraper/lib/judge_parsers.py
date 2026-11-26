@@ -118,7 +118,7 @@ judge_normalizers = {
 }
 
 
-def normalize_judge_titles(title):
+def normalize_judge_titles(title: str) -> str:
     """Normalize judge titles
 
     Take in a string like "Magistrate Judge" and return the normalized
@@ -133,7 +133,7 @@ def normalize_judge_titles(title):
     return judge_normalizers.get(title, f"UNKNOWN: {title}")
 
 
-def normalize_judge_names(name):
+def normalize_judge_names(name: str) -> str:
     """Cleans up little issues with people's names"""
     out = []
     words = name.split()
@@ -163,7 +163,7 @@ def normalize_judge_names(name):
     return " ".join(out)
 
 
-def normalize_judge_string(judge):
+def normalize_judge_string(judge: str) -> tuple[str, str]:
     """Split a string representing a judge returning their name and title.
 
     This code was generated and tested against all judge strings in the RECAP
@@ -183,7 +183,7 @@ def normalize_judge_string(judge):
     name_words = []
     for w in words:
         contains_parens = "(" in w or ")" in w
-        starts_poorly = w.startswith("-") or w.startswith("~")
+        starts_poorly = w.startswith(("-", "~"))
         blacklisted = w in blacklist
         long_abbrev = len(w) > 2 and "." in w and w not in ["jr.", "sr."]
         if any([contains_parens, starts_poorly, blacklisted, long_abbrev]):

@@ -1,5 +1,7 @@
 from urllib.parse import urljoin
 
+from typing_extensions import override
+
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -11,8 +13,10 @@ class Site(OpinionSiteLinear):
         self.status = "Published"
         self.back_scrape_iterable = ["placeholder"]
         self.do_backscrape = False
+        self.should_have_results = True
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Parse HTML into case objects
 
         :return None
@@ -43,8 +47,8 @@ class Site(OpinionSiteLinear):
                 # Perform download since we are not yielding a site for each
                 # element in the backscrape iterable
                 self.url = urljoin(self.url, next_page[0])
-                self.html = self._download()
-                self._process_html()
+                self.html = await self._download()
+                await self._process_html()
 
     def skip_record(self, docket: str, filename: str) -> bool:
         """Check if a record belongs to 'FISCR'
@@ -56,7 +60,7 @@ class Site(OpinionSiteLinear):
         """
         return "FISCR" in docket or "FISCR" in filename
 
-    def _download_backwards(self, _) -> None:
+    async def _download_backwards(self, _) -> None:
         """Start from second page up to last page
 
         :return None

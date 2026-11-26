@@ -1,9 +1,11 @@
 import re
 from datetime import date, datetime, timedelta
-from typing import Optional
 from urllib.parse import urlencode, urljoin
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -21,7 +23,7 @@ class Site(OpinionSiteLinear):
         self.make_backscrape_iterable(kwargs)
 
     def set_url(
-        self, start: Optional[date] = None, end: Optional[date] = None
+        self, start: date | None = None, end: date | None = None
     ) -> None:
         """Sets URL with appropriate query parameters
 
@@ -45,6 +47,7 @@ class Site(OpinionSiteLinear):
         }
         self.url = f"{self.base_url}?{urlencode(params)}"
 
+    @override
     def _process_html(self) -> None:
         """Process the HTML from wisconsin
 
@@ -64,7 +67,8 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def extract_from_text(self, scraped_text: str) -> dict:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Extract citation from text
 
         :param scraped_text: Text of scraped content
@@ -76,7 +80,7 @@ class Site(OpinionSiteLinear):
 
         return {}
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Set date range from backscraping args and scrape
 
         :param dates: (start_date, end_date) tuple
@@ -84,5 +88,5 @@ class Site(OpinionSiteLinear):
         """
         logger.info("Backscraping for range %s %s", *dates)
         self.set_url(*dates)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

@@ -12,6 +12,7 @@ History:
  - 2019-02-26: Restructured completely by arderyp
  - 2024-09-18: Update to OpinionSiteLinear, implement backscraper,
     support unpublished opinions, by @grossir
+- 2025-09-03: Retrieve lower_court in extract_from_text by @luism
 
 Contact information:
  - Help desk: (803) 734-1193, Travis
@@ -22,8 +23,11 @@ Contact information:
 import re
 from datetime import date
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.date_utils import unique_year_month
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -38,6 +42,11 @@ class Site(OpinionSiteLinear):
     days_interval = 27  # guarantees picking each month
     first_opinion_date = date(2000, 1, 1)
     docket_regex = r"Appellate Case No. (?P<docket>\d{4}-\d+)"
+    lower_court_regex = re.compile(
+        r"Appeals? [Ff]rom (the )?(?P<lower_court>.+?)\n"
+        r"(?P<judge>.+?),?\s*(?:Circuit|PCR|Master-in-Equity|Family)[^\n]*\n",
+        re.MULTILINE,
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -49,12 +58,18 @@ class Site(OpinionSiteLinear):
         else:
             self.status = "Unpublished"
 
-    def _process_html(self):
-        xpath = ".//p[contains(@class, '{}')]/text()"
+    @override
+    def _process_html(self) -> None:
         for row in self.html.xpath("//div[contains(@class,'case-result')]"):
-            date_filed = row.xpath("preceding-sibling::div[h3]/h3/text()")[-1]
-            docket = row.xpath(xpath.format("case-number"))[0]
-            name = row.xpath(xpath.format("case-name"))[0]
+            date_filed = row.xpath(
+                "preceding-sibling::div[contains(@class,'result-heading')]/h3/text()"
+            )[-1]
+            docket = row.xpath(
+                ".//span[contains(@class, 'case-number')]/text()"
+            )[0]
+            name = row.xpath(".//span[contains(@class, 'case-name')]/text()")[
+                0
+            ]
 
             summary = row.xpath(".//div[@class='result-info']/p/text()")
             if summary:
@@ -63,7 +78,7 @@ class Site(OpinionSiteLinear):
                 # Unpublished opinions don't have a summary
                 summary = ""
 
-            url = row.xpath(".//a/@href")[0]
+            url = row.xpath(".//a[contains(@class,'download-link')]/@href")[0]
             self.cases.append(
                 {
                     "docket": docket,
@@ -74,9 +89,8 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def make_backscrape_iterable(
-        self, kwargs: dict
-    ) -> list[tuple[date, date]]:
+    @override
+    def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Reuse base function to get a sequence of date objects for
         each month in the interval. Then, convert them to target URLs
         and replace the self.back_scrape_iterable
@@ -86,7 +100,7 @@ class Site(OpinionSiteLinear):
             self.back_scrape_iterable
         )
 
-    def _download_backwards(self, date_obj: date) -> None:
+    async def _download_backwards(self, date_obj: date) -> None:
         """Downloads an older page, and parses it
 
         Opinions from terms older than 2012-06 are in HTML
@@ -104,7 +118,7 @@ class Site(OpinionSiteLinear):
 
         self.url = self.make_url_from_date(date_obj)
         logger.info("Backscraping URL: %s", self.url)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
     def make_url_from_date(self, date_obj: date) -> str:
@@ -121,7 +135,27 @@ class Site(OpinionSiteLinear):
             str(date_obj.month).zfill(2),
         )
 
-    def extract_from_text(self, scraped_text: str) -> dict:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract docket number from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+        results: ExtractedMetaData = {}
+        if match := self.lower_court_regex.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            results.setdefault("Docket", {})["appeal_from_str"] = lower_court
+            judge = match.group("judge").strip()
+            if judge:
+                results["OriginatingCourtInformation"] = {
+                    "assigned_to_str": judge
+                }
+
         if match := re.search(self.docket_regex, scraped_text):
-            return {"Docket": {"docket_number": match.group("docket")}}
-        return {}
+            results.setdefault("Docket", {})["docket_number"] = match.group(
+                "docket"
+            )
+        return results

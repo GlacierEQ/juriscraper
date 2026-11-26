@@ -1,9 +1,9 @@
 __all__ = [
     "guam",
+    "superctguam",
     "nmariana",
     "prsupreme",
     "prapp",
     "virginislands",
-    "visuper_p",
-    "visuper_u",
+    "visuper",
 ]

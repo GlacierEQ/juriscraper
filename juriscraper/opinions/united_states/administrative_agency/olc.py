@@ -11,7 +11,11 @@ History:
 from datetime import date, datetime
 from urllib.parse import urlencode
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
+from juriscraper.lib.auth_utils import get_justice_dot_gov_auth_cookies
+from juriscraper.lib.exceptions import UnexpectedContentTypeError
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -27,8 +31,10 @@ class Site(OpinionSiteLinear):
         self.status = "Published"
         self.url = f"{self.base_url}?items_per_page=40"
         self.make_backscrape_iterable(kwargs)
+        self.should_have_results = True
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         for row in self.html.xpath(".//article"):
             name = row.xpath(".//h2")[0].text_content().strip()
             if not name:
@@ -46,7 +52,7 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -61,5 +67,27 @@ class Site(OpinionSiteLinear):
             "items_per_page": "40",
         }
         self.url = f"{self.base_url}?{urlencode(params)}"
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
+
+    @override
+    async def download_content(
+        self,
+        download_url: str,
+        doctor_is_available: bool = True,
+        media_root: str = "",
+    ) -> str | bytes:
+        """Overrides regular download_content to handle the
+        "I am not a robot challenge". See #1724
+        """
+        try:
+            return await super().download_content(
+                download_url, doctor_is_available, media_root
+            )
+        except UnexpectedContentTypeError as exc:
+            # access HTML with JS variables to populate cookies
+            html_text = exc.data["response"].text
+            self.cookies = get_justice_dot_gov_auth_cookies(html_text)
+            return await super().download_content(
+                download_url, doctor_is_available, media_root
+            )

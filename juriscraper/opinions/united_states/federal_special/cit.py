@@ -17,6 +17,7 @@ class Site(OpinionSite):
         self.url = "http://www.cit.uscourts.gov/SlipOpinions/index.html"
         self.court_id = self.__module__
         self.base = '//tr[../tr/th[contains(., "Caption")]]'
+        self.should_have_results = True
 
     def _get_download_urls(self):
         return list(self.html.xpath(f"{self.base}/td[1]/a/@href"))
@@ -77,12 +78,10 @@ class Site(OpinionSite):
         return dates
 
     def _get_docket_numbers(self):
-        docket_numbers = []
-        for e in self.html.xpath(f"{self.base}/td[4][../td/a]"):
-            docket_numbers.append(
-                html.tostring(e, method="text", encoding="unicode").strip()
-            )
-        return docket_numbers
+        return [
+            html.tostring(e, method="text", encoding="unicode").strip()
+            for e in self.html.xpath(f"{self.base}/td[4][../td/a]")
+        ]
 
     def _get_judges(self):
         judges = []

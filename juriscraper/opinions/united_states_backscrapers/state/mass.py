@@ -1,19 +1,27 @@
 import re
-from datetime import date, datetime
-from typing import Any
+from datetime import datetime
+from typing import TypedDict
 
 from dateutil import parser
 from lxml.html import fromstring
+from typing_extensions import override
 
 from juriscraper.lib.string_utils import clean_string
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
+
+
+class _BackscrapeDateRange(TypedDict):
+    start: datetime
+    end: datetime | None
+    url: str
 
 
 class Site(OpinionSiteLinear):
     first_opinion_date = datetime(1931, 2, 26)
     docket_number_regex = r"SJC-\d+"
     # This mapper is missing older volumes
-    backscrape_date_range_mapper = [
+    backscrape_date_range_mapper: list[_BackscrapeDateRange] = [
         {
             "start": datetime(2016, 7, 25),
             "end": None,
@@ -42,7 +50,7 @@ class Site(OpinionSiteLinear):
     ]
     # on the cl_scrape_opinions command in Courtlistener,
     # a headers variable is required for mass
-    headers = {}
+    headers: dict = {}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -50,6 +58,7 @@ class Site(OpinionSiteLinear):
         self.make_backscrape_iterable(kwargs)
         self.expected_content_types = ["text/html"]
 
+    @override
     def _process_html(self) -> None:
         """Parse HTML into case dictionaries
 
@@ -84,7 +93,8 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def extract_from_text(self, scraped_text: str) -> dict[str, Any]:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Extracts docket number from downloaded opinion HTML
 
         Possible on SJC. since `Records And Briefs` section cites
@@ -122,8 +132,8 @@ class Site(OpinionSiteLinear):
             "OpinionCluster": {"headnotes": headnotes, "summary": summary},
         }
 
-    def _download_backwards(
-        self, dates_and_url: tuple[date, date, str]
+    async def _download_backwards(
+        self, dates_and_url: tuple[datetime, datetime, str]
     ) -> None:
         """Set proper `masscases.com` url as self.url, and parse content
 
@@ -132,9 +142,10 @@ class Site(OpinionSiteLinear):
         :return None
         """
         self.start_date, self.end_date, self.url = dates_and_url
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
         by caller, and parses them accordingly

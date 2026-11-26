@@ -1,7 +1,9 @@
 import calendar
 import re
 import string
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from typing import Literal, overload
+from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import geonamescache
 from dateutil import parser
@@ -30,10 +32,14 @@ SUBPHRASE = re.compile(r"([:;?!][ ])(%s)" % SMALL)
 APOS_SECOND = re.compile(r"^[dol]{1}['‘]{1}[a-z]+$", re.I)
 ALL_CAPS = re.compile(rf"^[A-Z\s{PUNCT}{WEIRD_CHARS}{NUMS}]+$")
 UC_INITIALS = re.compile(r"^(?:[A-Z]{1}\.{1}|[A-Z]{1}\.{1}[A-Z]{1})+,?$")
-MAC_MC = re.compile(r"^([Mm]a?c)(\w+.*)")
+# Mc-only on purpose: Mc- words in case names are nearly always surnames,
+# while Mac- words usually are not (Machine, Mack, Macon, ...), so
+# capitalizing after "Mac" corrupts them. Mixed-case Mac-surnames
+# (MacDonald) pass through unchanged via UC_ELSEWHERE. See #2048.
+MAC_MC = re.compile(r"^([Mm]c)(\w+.*)")
 
 
-def titlecase(text, DEBUG=False):
+def titlecase(text: str, DEBUG: bool = False) -> str:
     """Titlecases input text
 
     This filter changes all words to Title Caps, and attempts to be clever
@@ -72,10 +78,9 @@ def titlecase(text, DEBUG=False):
                         print(f"  UC_INITIALS match for: {word}")
                     tc_line.append(word)
                     continue
-                else:
-                    if DEBUG:
-                        print(f"  Not initials. Lowercasing: {word}")
-                    word = word.lower()
+                if DEBUG:
+                    print(f"  Not initials. Lowercasing: {word}")
+                word = word.lower()
 
             if APOS_SECOND.match(word):
                 # O'Reiley, L'Oreal, D'Angelo
@@ -152,7 +157,7 @@ def titlecase(text, DEBUG=False):
                 continue
 
             match = MAC_MC.match(word)
-            if match and (word not in ["mack", "machine"]):
+            if match:
                 if DEBUG:
                     print(f"  MAC_MAC matched. Capitalizing: {word}")
                 tc_line.append(
@@ -164,9 +169,7 @@ def titlecase(text, DEBUG=False):
                 )
                 continue
 
-            hyphenated = []
-            for item in word.split("-"):
-                hyphenated.append(_uppercase_word(item))
+            hyphenated = [_uppercase_word(item) for item in word.split("-")]
             tc_line.append("-".join(hyphenated))
 
         result = " ".join(tc_line)
@@ -186,12 +189,10 @@ def titlecase(text, DEBUG=False):
         text = "\n".join(processed)
 
     # replace V. with v.
-    text = re.sub(re.compile(r"\WV\.\W"), " v. ", text)
-
-    return text
+    return re.sub(re.compile(r"\WV\.\W"), " v. ", text)
 
 
-def _uppercase_word(word):
+def _uppercase_word(word: str) -> str:
     """
     Helper function for uppercasing a word if it doesn't begin with Unicode characters.
 
@@ -205,7 +206,7 @@ def _uppercase_word(word):
     return CAPFIRST.sub(lambda m: m.group(0).upper(), word)
 
 
-def fix_camel_case(s):
+def fix_camel_case(s: str) -> str:
     """Sometimes courts provide nasty camel-cased content instead of real
     words. This code attempts to fix that."""
     if " " in s:
@@ -273,7 +274,7 @@ def fix_camel_case(s):
 # More details: http://www.law.cornell.edu/citation/4-300.htm
 US = r"USA|U\.S\.A\.|U\.S\.?|U\. S\.?|(The )?United States of America|The United States"
 UNITED_STATES = re.compile(r"^(%s)(,|\.)?$" % US, re.I)
-ET_AL = re.compile(r",?\set\.?\sal\.?", re.I)
+ET_AL = re.compile(r",?\set\.?\sal(?:s|ii|iae|ia)?\b\.?", re.I)
 BW = (
     "appell(ee|ant)s?|claimants?|complainants?|defendants?|defendants?(--?|/)appell(ee|ant)s?"
     + r"|devisee|executor|executrix|pet(\.|itioner)s?|petitioners?(--?|/)appell(ee|ant)s?"
@@ -284,7 +285,7 @@ BW = (
 BAD_WORDS = re.compile(r"^(%s)(,|\.)?$" % BW, re.I)
 
 
-def harmonize(text):
+def harmonize(text) -> str:
     """Fixes case names so they are cleaner.
 
     Using a bunch of regex's, this function cleans up common data problems in
@@ -337,13 +338,13 @@ def harmonize(text):
     result = re.sub(ET_AL, "", result)
 
     # Fix the No. and Nos.
-    if result.startswith("No.") or result.startswith("Nos."):
+    if result.startswith(("No.", "Nos.")):
         result = re.sub(r"^Nos?\.\s+", "", result)
 
     return clean_string(result)
 
 
-def clean_string(s):
+def clean_string(s) -> str:
     """Clean up strings.
 
     Accomplishes the following:
@@ -398,12 +399,12 @@ def clean_string(s):
     s = " ".join(s.split())
 
     # Convert non-breaking spaces to regular spaces
-    s = s.replace("\u00a0", " ")
-
-    return s
+    return s.replace("\u00a0", " ")
 
 
-def force_unicode(s, encoding="utf-8", strings_only=False, errors="strict"):
+def force_unicode(
+    s, encoding="utf-8", strings_only=False, errors="strict"
+) -> str:
     # Borrows heavily from django.utils.encoding.force_unicode.
     # This should be applied to *input* not *output*!
     # Handle the common case first, saves 30-40% in performance when s
@@ -441,22 +442,18 @@ def force_unicode(s, encoding="utf-8", strings_only=False, errors="strict"):
     except UnicodeDecodeError:
         if not isinstance(s, Exception):
             raise
-        else:
-            # If we get to here, the caller has passed in an Exception
-            # subclass populated with non-ASCII bytestring data without a
-            # working unicode method. Try to handle this without raising a
-            # further exception by individually forcing the exception args
-            # to unicode.
-            s = " ".join(
-                [
-                    force_unicode(arg, encoding, strings_only, errors)
-                    for arg in s
-                ]
-            )
+        # If we get to here, the caller has passed in an Exception
+        # subclass populated with non-ASCII bytestring data without a
+        # working unicode method. Try to handle this without raising a
+        # further exception by individually forcing the exception args
+        # to unicode.
+        s = " ".join(
+            [force_unicode(arg, encoding, strings_only, errors) for arg in s]
+        )
     return s
 
 
-def trunc(s, length, ellipsis=None):
+def trunc(s: str, length: int, ellipsis: str | None = None) -> str:
     """Truncates a string at a good length.
 
     Finds the rightmost space in a string, and truncates there. Lacking such
@@ -473,21 +470,30 @@ def trunc(s, length, ellipsis=None):
     if len(s) <= length:
         # Do not ellipsize if the item is not truncated.
         return s
-    else:
-        # find the rightmost space using a zero-indexed (+1) length minus the
-        # length of the ellipsis.
-        rightmost_space_index = length - ellipsis_length + 1
-        end = s.rfind(" ", 0, rightmost_space_index)
-        if end == -1:
-            # no spaces found, just use max position
-            end = length - ellipsis_length
-        s = s[0:end]
-        if ellipsis:
-            s = f"{s}{ellipsis}"
-        return s
+    # find the rightmost space using a zero-indexed (+1) length minus the
+    # length of the ellipsis.
+    rightmost_space_index = length - ellipsis_length + 1
+    end = s.rfind(" ", 0, rightmost_space_index)
+    if end == -1:
+        # no spaces found, just use max position
+        end = length - ellipsis_length
+    s = s[0:end]
+    if ellipsis:
+        s = f"{s}{ellipsis}"
+    return s
 
 
-def convert_date_string(date_string, fuzzy=False, datetime=False):
+@overload
+def convert_date_string(
+    date_string: str, *, fuzzy: bool = ..., datetime: Literal[True]
+) -> datetime | None: ...
+@overload
+def convert_date_string(
+    date_string: str, *, fuzzy: bool = ..., datetime: Literal[False] = False
+) -> date | None: ...
+def convert_date_string(
+    date_string: str, *, fuzzy: bool = False, datetime: bool = False
+) -> date | datetime | None:
     """Sanitize date string and convert into standard date object
 
     :param date_string: A string to convert to a datetime object.
@@ -510,11 +516,10 @@ def convert_date_string(date_string, fuzzy=False, datetime=False):
     dt = parser.parse(date_string, fuzzy=fuzzy)
     if datetime:
         return dt
-    else:
-        return dt.date()
+    return dt.date()
 
 
-def split_date_range_string(date_range_string):
+def split_date_range_string(date_range_string: str) -> date:
     """This function requires a string in 'January - March 2016' format"""
     date_range_string = normalize_dashes(date_range_string)
     parts = date_range_string.split()
@@ -525,12 +530,14 @@ def split_date_range_string(date_range_string):
     last_day = calendar.monthrange(int(year), months[month2])[1]
     start_date = convert_date_string(f"{month1} 1, {year}")
     end_date = convert_date_string("%s %d, %s" % (month2, last_day, year))
+    if start_date is None or end_date is None:
+        raise Exception("Could not produce start and end date from string")
     delta = end_date - start_date
     dates_in_range = [start_date + timedelta(d) for d in range(delta.days + 1)]
     return dates_in_range[int(len(dates_in_range) / 2)]
 
 
-def normalize_dashes(raw_string):
+def normalize_dashes(raw_string: str) -> str:
     """Replace various dash formats with normal dash"""
     dashes = [
         # copied from http://www.w3schools.com/charsets/ref_utf_punctuation.asp
@@ -549,11 +556,11 @@ def normalize_dashes(raw_string):
 
 class CaseNameTweaker:
     def __init__(self):
-        self._bad_words = None
+        self._bad_words: list[str] | None = None
         super().__init__()
 
     @property
-    def bad_words(self):
+    def bad_words(self) -> list[str]:
         """A list of words that shouldn't be in small case names according to
         Blue Book rules.
 
@@ -609,6 +616,7 @@ class CaseNameTweaker:
             "johnson",
             "commissioner",
             "commonwealth",
+            "com",
         ]
 
         ags = [
@@ -712,9 +720,11 @@ class CaseNameTweaker:
         # Add variations with punctuation
         punctuation_bad_words = []
         for word in bad_words:
-            for punctuation in string.punctuation:
-                if not word.endswith(punctuation):
-                    punctuation_bad_words.append(f"{word}{punctuation}")
+            punctuation_bad_words.extend(
+                f"{word}{punctuation}"
+                for punctuation in string.punctuation
+                if not word.endswith(punctuation)
+            )
         bad_words = bad_words + punctuation_bad_words
 
         bad_words = [s.lower() for s in bad_words]
@@ -723,7 +733,7 @@ class CaseNameTweaker:
         return bad_words
 
     @staticmethod
-    def make_geographies_list():
+    def make_geographies_list() -> list[str]:
         """Make a flat list of cities, counties and states that we can exclude
         from short names.
         """
@@ -739,7 +749,7 @@ class CaseNameTweaker:
         states = [v["name"] for v in geonames.get_us_states().values()]
         return cities + counties + states
 
-    def make_case_name_short(self, s):
+    def make_case_name_short(self, s: str) -> str:
         """Creates short case names where obvious ones can easily be made."""
         parts = [part.strip().split() for part in s.split(" v. ")]
         if len(parts) == 1:
@@ -747,18 +757,17 @@ class CaseNameTweaker:
             if len(parts[0]) <= 3:
                 # Good length for a shortened case name.
                 return s
-            else:
-                # Too long; too weird. Punt.
-                return ""
+            # Too long; too weird. Punt.
+            return ""
 
-        elif len(parts) == 2:
+        if len(parts) == 2:
             # X v. Y --> [['X'], ['Y']]
             # X Y Z v. A B --> [['X', 'Y', 'Z'], ['A', 'B']]
             if len(parts[0]) == 1:
                 if parts[0][0].lower() not in self.bad_words:
                     # Simple case: Langley v. Google
                     return parts[0][0]
-                elif (
+                if (
                     len(parts[1]) == 1
                     # Plaintiff was a bad_word. Try the defendant.
                     # Dallas v. Lissner
@@ -780,7 +789,7 @@ class CaseNameTweaker:
         return ""
 
 
-def clean_if_py3(s):
+def clean_if_py3(s: str) -> str:
     """
     Cleans up text if using Python 3
 
@@ -794,3 +803,47 @@ def clean_if_py3(s):
         s = s.replace(raw, replacement)
 
     return s
+
+
+FILE_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(\w+)")
+
+
+def size_string_to_bytes(size: str) -> int:
+    """
+    Quick and dirty method to turn a human-readable file-size string into the
+    corresponding number of bytes. Returns 0 if the size is noninteger or
+    was invalid.
+
+    :param size: The human-readable file size string, e.g. "10 MB"
+
+    :return: The number of bytes rounded to the nearest integer.
+    """
+    file_size_match = FILE_SIZE_RE.fullmatch(size)
+    if file_size_match is None:
+        return 0
+    size_group = file_size_match.group(1)
+    size_unit_group = file_size_match.group(2)
+    n_bytes = float(size_group)
+    units = {"B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9, "TB": 10**12}
+    size_unit = units.get(size_unit_group, 0)
+    return int(round(n_bytes * size_unit))
+
+
+def clean_url(url: str) -> str:
+    """Turns invalid URLs into valid URLs pointing to the same resource.
+
+    Became necessary after discovering that Texas sometimes puts invalid URLs
+    as the `href` attribute on their `<a>` elements.
+
+    :param url: The URL to clean
+    :return: The cleaned URL"""
+    # Escape '#' in the query string before parsing, so urlparse doesn't
+    # treat it as a fragment delimiter (Texas URLs sometimes contain
+    # unescaped '#' in query parameter values like "DT=53.7(F) FILED #2").
+    qmark = url.find("?")
+    if qmark != -1:
+        url = url[: qmark + 1] + url[qmark + 1 :].replace("#", "%23")
+    scheme, netloc, path, params, query, fragment = urlparse(url)
+    query_dict = parse_qs(query)
+    clean_query = urlencode(query_dict, doseq=True, quote_via=quote_plus)
+    return urlunparse((scheme, netloc, path, params, clean_query, fragment))

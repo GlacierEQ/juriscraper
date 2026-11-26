@@ -2,8 +2,11 @@ import re
 from datetime import date, datetime
 from urllib.parse import urlencode
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -19,7 +22,13 @@ class Site(OpinionSiteLinear):
         )
         self.status = "Published"
         self.make_backscrape_iterable(kwargs)
+        self.should_have_results = True
+        # Imperva WAF blocks the default UA on both the index pages and the
+        # opinion PDFs, so the override must also apply to content downloads.
+        self.needs_special_headers = True
+        self.request["headers"]["User-Agent"] = self.chrome_user_agent
 
+    @override
     def _process_html(self) -> None:
         """Process the html and extract out the opinions
 
@@ -59,7 +68,44 @@ class Site(OpinionSiteLinear):
 
             self.cases.append(case)
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract lower court from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+        pattern = re.compile(
+            r"""
+            (?:
+                On\s+certification\s+to\s+the\s+
+                |On\s+appeal\s+from\s+the\s+
+                |On\s+petitions\s+for\s+review\s+of\s+a\s+decision\s+of\s+the\s+
+            )
+            (?P<lower_court>[^.]+?)
+            (?=\s*[.,])
+            """,
+            re.X,
+        )
+
+        lower_court = ""
+        if match := pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            if lower_court.lower().strip() == "superior court":
+                lower_court = "New Jersey Superior Court"
+
+        if lower_court:
+            return {
+                "Docket": {
+                    "appeal_from_str": titlecase(lower_court),
+                }
+            }
+
+        return {}
+
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -71,5 +117,5 @@ class Site(OpinionSiteLinear):
             "end": dates[1].strftime("%Y-%m-%d"),
         }
         self.url = f"{self.base_url}?{urlencode(params)}"
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

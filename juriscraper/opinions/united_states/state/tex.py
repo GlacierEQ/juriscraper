@@ -17,23 +17,32 @@
 #  - 2021-12-28: Updated by flooie to remove selenium.
 #  - 2024-02-21; Updated by grossir: handle dynamic backscrapes
 #  - 2025-05-30; Updated by lmanzur: get opinions from the orders on causes page
+#  - 2026-07-11; Fix date extraction after order page layout change
 
 import re
 from datetime import date
 from datetime import datetime as dt
 
 from lxml import etree
+from typing_extensions import override
 
+from juriscraper.AbstractSite import logger
+from juriscraper.ClusterSite import ClusterSite
 from juriscraper.lib.string_utils import titlecase
 from juriscraper.lib.type_utils import OpinionType
-from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
-class Site(OpinionSiteLinear):
+class Site(ClusterSite):
     base_url = "https://www.txcourts.gov/supreme/orders-opinions/{}/"
+    # link_xp targets the year-index page's bullet list of dated order
+    # subpages (one <li><a> per date); date_xp targets the "Orders
+    # Pronounced …" header on a single day's order page. It is anchored
+    # on that text rather than the page layout, which changed in
+    # June 2026.
     link_xp = '//*[@id="MainContent"]/div/div/div/ul/li/a/@href'
-    date_xp = '//*[@id="MainContent"]/div/div[1]/div/text()'
-    judge_xp = r"(?:Chief\s)?Justice\s([A-Z][a-zA-Z]+)"
+    date_xp = '//div[contains(text(), "Orders Pronounced")]/text()'
+    date_regex = r"Orders Pronounced\s+(?P<date>.+)"
+    judge_regex = r"(?:Chief\s)?Justice\s([A-Z][a-zA-Z]+)"
     days_interval = 365
 
     def __init__(self, *args, **kwargs):
@@ -46,7 +55,7 @@ class Site(OpinionSiteLinear):
         self.make_backscrape_iterable(kwargs)
         self.is_backscrape = False
 
-    def _download(self, request_dict=None):
+    async def _download(self, request_dict=None):
         """Downloads the HTML content for the current opinion page.
 
         :param request_dict (dict, optional): Additional request parameters.
@@ -56,24 +65,58 @@ class Site(OpinionSiteLinear):
             request_dict = {}
 
         if not self.is_backscrape and not self.test_mode_enabled():
-            self.html = super()._download(request_dict)
-            self.url = self.html.xpath(self.link_xp)[-1]
-        self.html = super()._download(request_dict)
+            self.html = await super()._download(request_dict)
+            links = self.html.xpath(self.link_xp)
+            if not links:
+                # No orders posted yet (common in early January)
+                self.html = None
+                logger.error("tex: no date list on opinions page")
+                return None
+            self.url = links[-1]
 
+        self.html = await super()._download(request_dict)
         return self.html
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Parses the HTML content
 
         :return None
         """
-        date = self.html.xpath(self.date_xp)[0].strip()
+        if self.html is None:
+            return
+
+        date_strings = self.html.xpath(self.date_xp)
+        if not date_strings:
+            logger.error("tex: no 'Orders Pronounced' header on order page")
+            return
+        date_match = re.search(self.date_regex, date_strings[0])
+        if not date_match:
+            logger.error(
+                "tex: unable to parse date from 'Orders Pronounced' header"
+            )
+            return
+        date = date_match.group("date").strip()
+        # Each day's page contains many PDF links; only those inside a
+        # <span class="a70"> (court opinion + disposition cell) or
+        # <span class="a79"> (separate opinion cell — concurrence /
+        # dissent) belong to an opinion. Everything else (orders PDF,
+        # case summaries, admin docs) gets filtered out below.
         links = self.html.xpath('//a[contains(@href, ".pdf")]')
         for link in links:
             if link.getparent() is None or link.getparent().get(
                 "class"
             ) not in ["a79", "a70"]:
+                logger.info(
+                    "Skipping row with link %s", link.attrib.get("href")
+                )
                 continue
+
+            # The page's table interleaves header rows with cells of
+            # class "a50cl" (docket number) and "a54cl" (case title)
+            # before each opinion row. Walk back from the opinion's row
+            # to find the most recent header row — its last entry is
+            # the docket+title pair belonging to this opinion.
             precedingTRs = link.xpath(
                 'ancestor::tr/preceding-sibling::tr[td[@class="a50cl"]]'
             ) or link.xpath(
@@ -86,35 +129,40 @@ class Site(OpinionSiteLinear):
                 if tr_text.strip()
             ]
 
+            parent = link.getparent()
+            # When the first element under <span class="a70"> is the
+            # link itself, the cell has no disposition prose — the
+            # parent's .text is the judge intro, not the disposition.
+            has_disposition = (
+                parent.get("class") == "a70" and parent[0].tag != "a"
+            )
             disposition = (
-                link.getparent().xpath(".//text()")[0]
-                if link.getparent().get("class") == "a70"
-                else ""
+                parent.xpath(".//text()")[0] if has_disposition else ""
             )
 
+            # Judge intro text sits on the preceding sibling's tail when
+            # a <br> separates entries, but on the parent's own .text
+            # when this is the first link in the cell.
+            previous = link.getprevious()
+            leading = previous.tail if previous is not None else parent.text
             judge_str = (
-                "".join(
-                    [
-                        x
-                        for x in [
-                            link.getprevious().tail,
-                            link.text,
-                            link.tail,
-                        ]
-                        if x
-                    ]
-                )
-                if disposition
+                "".join(x for x in [leading, link.text, link.tail] if x)
+                if parent.get("class") == "a70"
                 else ""
             )
 
-            judges = re.findall(self.judge_xp, judge_str)
+            author = ""
+            joined_by = ""
+            judge = ""
+
+            judges = re.findall(self.judge_regex, judge_str)
             if judges:
                 author = judges[0]
-                per_curiam = False
-            else:
-                author = ""
-                per_curiam = True
+                judge = "; ".join(judges)
+            if len(judges) > 1:
+                joined_by = "; ".join(judges[1:])
+
+            per_curiam = "per curiam" in link.text_content().lower()
 
             lower_court, lower_court_number, lower_court_id = (
                 self.parse_lower_court_info(title)
@@ -122,25 +170,28 @@ class Site(OpinionSiteLinear):
 
             title_regex = r"^(?P<name>.*?)(?=; from|(?=\([^)]*\)$))"
             title_match = re.search(title_regex, title, flags=re.MULTILINE)
+            case_dict = {
+                "name": titlecase(
+                    title_match.group("name") if title_match else title
+                ),
+                "disposition": disposition,
+                "url": link.get("href"),
+                "docket": docket,
+                "date": date,
+                "type": self.extract_type(link),
+                "per_curiam": per_curiam,
+                "judge": judge,
+                "author": author,
+                "joined_by": joined_by,
+                "lower_court": lower_court,
+                "lower_court_number": lower_court_number,
+                "lower_court_id": lower_court_id,
+            }
 
-            self.cases.append(
-                {
-                    "name": titlecase(
-                        title_match.group("name") if title_match else title
-                    ),
-                    "disposition": disposition,
-                    "url": link.get("href"),
-                    "docket": docket,
-                    "date": date,
-                    "type": self.extract_type(link),
-                    "per_curiam": per_curiam,
-                    "judge": ", ".join(judges),
-                    "author": author,
-                    "lower_court": lower_court,
-                    "lower_court_number": lower_court_number,
-                    "lower_court_id": lower_court_id,
-                }
-            )
+            if cluster := self.cluster_opinions(case_dict, self.cases):
+                cluster["judge"] += f"; {case_dict['judge']}"
+            else:
+                self.cases.append(case_dict)
 
     @staticmethod
     def parse_lower_court_info(title: str) -> tuple[str, str, str]:
@@ -162,10 +213,15 @@ class Site(OpinionSiteLinear):
 
         if match := re.search(texapp_regex, title):
             lower_court = match.group("lower_court")
-            lower_court_number = title[match.end() :].split(",")[0]
+            # When the parenthetical holds only the case number, e.g.
+            # "(15-25-00231-CV)", there is no comma to split on and the
+            # closing parenthesis must be stripped
+            lower_court_number = (
+                title[match.end() :].split(",")[0].rstrip(")").strip()
+            )
             return lower_court, lower_court_number, "texapp"
 
-        elif match := re.search(other_courts_regex, title):
+        if match := re.search(other_courts_regex, title):
             lower_court = match.group("lower_court")
             lower_court_number = match.group("lower_number")
 
@@ -185,8 +241,8 @@ class Site(OpinionSiteLinear):
     def extract_type(link: etree.Element) -> str:
         """Determines the opinion type
 
-        :param link (etree.Element) The anchor element containing the PDF link.
-        :return str The opinion type as a string.
+        :param link: (etree.Element) The anchor element containing the PDF link.
+        :return str: The opinion type as a string.
         """
         text = link.text.lower()
         url = link.get("href")
@@ -198,11 +254,19 @@ class Site(OpinionSiteLinear):
             op_type = OpinionType.DISSENT
         elif "concurring" in text or url.endswith("c.pdf"):
             op_type = OpinionType.CONCURRENCE
+        elif "statement" in text:
+            # Provisional type for "Statement of Justice ..." documents,
+            # chosen so same-day statements on one case can cluster
+            # without tripping the one-lead-per-cluster sanity check.
+            # The right type for statements is tracked outside this PR,
+            # see https://github.com/freelawproject/juriscraper/pull/2038
+            op_type = OpinionType.CONCURRENCE
         else:
             op_type = OpinionType.MAJORITY
         return str(op_type.value)
 
-    def make_backscrape_iterable(self, kwargs) -> None:
+    @override
+    def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
 
         Texas opinions page returns all opinions for a year (pagination is not needed),
@@ -216,12 +280,15 @@ class Site(OpinionSiteLinear):
         start = self.back_scrape_iterable[0][0]
         end = self.back_scrape_iterable[-1][-1]
 
-        dates = []
-        for year in list(range(start.year, end.year + 1)):
-            dates.append((year, start, end))
+        dates = [
+            (year, start, end)
+            for year in list(range(start.year, end.year + 1))
+        ]
         self.back_scrape_iterable = dates
 
-    def _download_backwards(self, analysis_window: tuple) -> None:
+    async def _download_backwards(
+        self, analysis_window: tuple[int, date, date]
+    ) -> None:
         """Downloads and processes opinions for a given year within a specified date range.
 
         :param analysis_window (tuple): A tuple containing the year (int), start date (date), and end date (date).
@@ -230,7 +297,7 @@ class Site(OpinionSiteLinear):
         self.is_backscrape = True
         year, start, end = analysis_window
         self.url = self.base_url.format(year)
-        self._download()
+        await self._download()
 
         for path in self.html.xpath(self.link_xp):
             if "historical" in path:
@@ -243,5 +310,5 @@ class Site(OpinionSiteLinear):
                 continue
 
             self.url = path
-            self._download()
-            self._process_html()
+            await self._download()
+            await self._process_html()

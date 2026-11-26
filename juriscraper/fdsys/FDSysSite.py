@@ -1,22 +1,23 @@
-import glob
 import json
+import pathlib
 import re
 from collections import defaultdict
 from datetime import date
 
-import requests
+import httpx
+from httpx import InvalidURL
 from lxml import etree
-from requests.exceptions import MissingSchema
 
 from juriscraper.AbstractSite import AbstractSite
 
 
-def get_tree(url):
+async def get_tree(url, **kwargs):
     try:
-        response = requests.get(url, stream=True)
-        response.raw.decode_content = True
-        return etree.parse(response.raw)
-    except MissingSchema:
+        kwargs.setdefault("http2", True)
+        async with httpx.AsyncClient(**kwargs) as client:
+            response = await client.get(url)
+            return etree.parse(await response.aread())
+    except InvalidURL:
         return etree.parse(url)
 
 
@@ -159,23 +160,27 @@ class FDSysSite(AbstractSite):
     def __len__(self):
         return len(xpath(self.html, "//s:loc/text()"))
 
-    def save_mods_file(self, url):
+    async def save_mods_file(self, url, **kwargs):
         mods_url = FDSysModsContent._get_mods_file_url(url)
         name = "-".join(mods_url.split("/")[-2].split("-")[1:])
-        with open(f"./examples/2006/{name}.xml", "w") as handle:
-            response = requests.get(mods_url, stream=True)
-            for block in response.iter_content(1024):
-                handle.write(block)
+        with pathlib.Path(f"./examples/2006/{name}.xml").open("wb") as handle:
+            kwargs.setdefault("http2", True)
+            async with (
+                httpx.AsyncClient(**kwargs) as client,
+                client.stream("GET", mods_url) as response,
+            ):
+                async for block in response.aiter_bytes():
+                    handle.write(block)
 
-    def _download(self, request_dict=None):
+    async def _download(self, request_dict=None):
         """
         it actually builds an XML tree
         """
-        return get_tree(self.url)
+        return await get_tree(self.url)
 
-    def _download_backwards(self, year):
+    async def _download_backwards(self, year):
         self.url = self.base_url.format(year=year)
-        self.html = self._download()
+        self.html = await self._download()
         if self.html is not None:
             # Setting status is important because it prevents the download
             # function from being run a second time by the parse method.
@@ -184,10 +189,10 @@ class FDSysSite(AbstractSite):
     def _check_sanity(self):
         pass
 
-    def parse(self):
+    async def parse(self):
         if self.status is None:
             # Run the downloader if it hasn't been run already
-            self.html = self._download()
+            self.html = await self._download()
         return self
 
 
@@ -197,8 +202,8 @@ def get_court_locations_list():
     """
     court_locations_list = defaultdict(set)
     # parse all the example files
-    for f in glob.glob("./examples/*/*.xml"):
-        fm = FDSysModsContent(f)
+    for f in pathlib.Path("examples").glob("*/*.xml"):
+        fm = FDSysModsContent(str(f))
         print(f, fm.court_id, fm.court_location)
         court_locations_list[fm.court_id].add(fm.court_location)
 
@@ -208,7 +213,7 @@ def get_court_locations_list():
         cl[k] = list(v)
 
     # save as json
-    with open("court_locations.json", "w") as j:
+    with pathlib.Path("court_locations.json").open("w") as j:
         json.dump(cl, j)
 
 
@@ -216,8 +221,8 @@ def get_the_first_5_words():
     l = defaultdict(list)  # noqa: E741
     p = defaultdict(list)
     word_counter = defaultdict(int)
-    for f in glob.glob("./examples/*/*.xml"):
-        fm = FDSysModsContent(f)
+    for f in pathlib.Path("examples").glob("*/*.xml"):
+        fm = FDSysModsContent(str(f))
         print(f, fm.court_id, fm.court_location)
         for document in fm.documents:
             try:
@@ -237,13 +242,13 @@ def get_the_first_5_words():
             l[f.__repr__()].append(ws)
             p[f.__repr__()].append(" ".join(words_to_use))
 
-    with open("first_8_words_string.json", "w") as pc:
+    with pathlib.Path("first_8_words_string.json").open("w") as pc:
         json.dump(p, pc)
 
-    with open("first_five_words.json", "w") as j:
+    with pathlib.Path("first_five_words.json").open("w") as j:
         json.dump(l, j)
 
-    with open("first_five_words_counter.json", "w") as c:
+    with pathlib.Path("first_five_words_counter.json").open("w") as c:
         json.dump(word_counter, c)
 
 

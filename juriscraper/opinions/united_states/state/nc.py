@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 
 from lxml import html
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
@@ -39,7 +40,8 @@ class Site(OpinionSiteLinear):
         self.url = self.base_url.format(self.court, self.current_year)
         self.make_backscrape_iterable(kwargs)
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         """Process the html
 
         :return: None
@@ -83,16 +85,17 @@ class Site(OpinionSiteLinear):
         # Second pattern for ncctapp unpublished opinions
         return self.coa_rgx.search(date_block).group("date")
 
-    def _download_backwards(self, year: int) -> None:
+    async def _download_backwards(self, year: int) -> None:
         """Build year URL and scrape
 
         :param year: year to scrape
         :return None
         """
         self.url = self.base_url.format(self.court, year)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
         by caller, and parses them accordingly

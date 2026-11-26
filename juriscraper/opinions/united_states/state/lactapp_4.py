@@ -10,10 +10,12 @@ import re
 from datetime import date, datetime
 
 from lxml.html import HtmlElement
+from typing_extensions import override
 
 from juriscraper.lib.date_utils import unique_year_month
 from juriscraper.lib.string_utils import titlecase
 from juriscraper.lib.type_utils import OpinionType
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -32,6 +34,7 @@ class Site(OpinionSiteLinear):
             "__EVENTTARGET": "ctl00$Main$btnOpMonthYearSearch",
         }
 
+    @override
     def _process_html(self) -> None:
         """Process the HTML to extract case details.
 
@@ -90,18 +93,19 @@ class Site(OpinionSiteLinear):
 
             self.parameters[name] = value
 
-    def _download_backwards(self, search_date: date) -> None:
+    async def _download_backwards(self, search_date: date) -> None:
         """Download and process HTML for a given target date.
 
         :param search_date (date): The date for which to download and process opinions.
-        :return None; sets the target date, downloads the corresponding HTML
+        :return: None; sets the target date, downloads the corresponding HTML
         and processes the HTML to extract case details.
         """
         self.search_date = search_date
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
-    def make_backscrape_iterable(self, kwargs) -> None:
+    @override
+    def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Make back scrape iterable
 
         :param kwargs: the back scraping params
@@ -112,7 +116,7 @@ class Site(OpinionSiteLinear):
             self.back_scrape_iterable
         )
 
-    def _download(self, request_dict=None) -> HtmlElement:
+    async def _download(self, request_dict=None) -> HtmlElement:
         """Download the HTML content for the current search state.
 
         :param request_dict (dict, optional): Additional request parameters.
@@ -120,19 +124,24 @@ class Site(OpinionSiteLinear):
         """
         if not self.test_mode_enabled():
             if not self.html:
-                self.html = super()._download()
+                self.html = await super()._download()
 
             self.update_parameters()
             self.method = "POST"
-        return super()._download()
+        return await super()._download()
 
-    def extract_from_text(self, scraped_text: str) -> dict:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Extracts structured metadata from the provided opinion text.
 
         :param scraped_text: The content of the document downloaded
         :return Metadata to be added to the case
         """
-        metadata = {"OpinionCluster": {}, "Opinion": {}, "Docket": {}}
+        metadata: ExtractedMetaData = {
+            "OpinionCluster": {},
+            "Opinion": {},
+            "Docket": {},
+        }
         pattern = r"^\s+[*]{6,}\n(?P<judge>.*)\s+[*]{6,}$"
         pattern2 = r"\s+\*{5,}(?:.*\n)*?\s+(\s+(?P<judge>.*)[,.] J\..*(RESULT|REASON|CONCUR))"
         pattern3 = r"\(Court composed of (?P<judges>.*?)\)"

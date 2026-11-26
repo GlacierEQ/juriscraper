@@ -13,6 +13,8 @@ History:
 import re
 from urllib.parse import urljoin
 
+from typing_extensions import override
+
 from juriscraper.lib.string_utils import titlecase
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
@@ -30,20 +32,22 @@ class Site(OpinionSiteLinear):
             "accept-encoding": "gzip, deflate, br, zstd",
             "accept-language": "en-US,en;q=0.9",
             "priority": "u=0, i",
-            "sec-ch-ua": '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
+            "sec-ch-ua": self.chrome_sec_ch_ua,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Linux"',
             "sec-fetch-dest": "document",
             "sec-fetch-mode": "navigate",
-            "sec-fetch-site": "none",
+            "sec-fetch-site": "cross-site",
             "sec-fetch-user": "?1",
             "upgrade-insecure-requests": "1",
-            "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+            "user-agent": self.chrome_user_agent,
         }
         self.needs_special_headers = True
+        self.should_have_results = True
 
         self.make_backscrape_iterable(kwargs)
 
+    @override
     def _process_html(self) -> None:
         """Process the HTML
 
@@ -53,10 +57,20 @@ class Site(OpinionSiteLinear):
         for item in self.html.xpath(path):
             url = item.xpath(".//td/a/@href")[0]
             first_cell = item.xpath(".//td/a/text()")[0]
-            docket = re.sub(
-                r"Docket Nos?\.", "", item.xpath(".//td[2]/text()")[0]
-            )
-            date_string = item.xpath(".//td[3]/text()")[0]
+            tds = item.xpath(".//td")
+            summary = ""
+            per_curiam = False
+
+            # Different table structure for recent vs older opinions
+            if len(tds) > 3:
+                docket = re.sub(r"Docket Nos?\.", "", tds[3].text)
+                summary = tds[2].text
+                per_curiam = "per curiam" in summary.lower()
+                date_string = tds[5].text
+            else:
+                docket = re.sub(r"Docket Nos?\.", "", tds[1].text)
+                date_string = tds[2].text
+
             m = re.search(self.citation_regex, first_cell)
             if m:
                 mj = m.group("MJ").strip("()") if m.group("MJ") else ""
@@ -77,11 +91,13 @@ class Site(OpinionSiteLinear):
                         "status": status,
                         "citation": mj,
                         "parallel_citation": wl,
+                        "summary": summary,
+                        "per_curiam": per_curiam,
                     }
                 )
             )
 
-    def _download_backwards(self, page_number: int) -> None:
+    async def _download_backwards(self, page_number: int) -> None:
         """Method used by backscraper to download historical records
 
         :param page_number: an element of self.back_scrape_iterable
@@ -123,6 +139,7 @@ class Site(OpinionSiteLinear):
         case["name"] = titlecase(name.strip(" -:"))
         return case
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed"""
 

@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from datetime import datetime
 
 from juriscraper.lib.log_tools import make_default_logger
 from juriscraper.lib.string_utils import (
@@ -19,7 +19,7 @@ class DownloadConfirmationPage(BaseReport):
     download page.
     """
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         super().__init__(court_id, pacer_session)
 
         self.is_appellate = False
@@ -30,12 +30,13 @@ class DownloadConfirmationPage(BaseReport):
         ]:
             self.is_appellate = True
 
-    def query(self, pacer_doc_id):
+    async def query(self, pacer_doc_id):
         """Query the "confirmation download page" endpoint and set the results
         to self.response.
 
         :param pacer_doc_id: The internal PACER document ID for the item.
-        :return: a request response object
+        :return None: Instead, sets self.response attribute and runs
+        self.parse()
         """
 
         assert self.session is not None, (
@@ -50,7 +51,7 @@ class DownloadConfirmationPage(BaseReport):
             url = make_doc1_url(self.court_id, pacer_doc_id, True)
 
         logger.info("Querying the confirmation page endpoint at URL: %s", url)
-        self.response = self.session.get(url, timeout=60)
+        self.response = await self.session.get(url, timeout=60)
         if is_pdf(self.response):
             # Sometimes the PDF document is returned without showing the
             # download confirmation page, not a valid page to parse.
@@ -105,7 +106,7 @@ class DownloadConfirmationPage(BaseReport):
             return False
         return True
 
-    def _get_document_number(self) -> Optional[str]:
+    def _get_document_number(self) -> str | None:
         """Get the document number for an item.
 
         :return: The PACER document number if available, otherwise None.
@@ -124,7 +125,7 @@ class DownloadConfirmationPage(BaseReport):
             return clean_string(document_number[0])
         return None
 
-    def _get_document_cost(self) -> Optional[str]:
+    def _get_document_cost(self) -> str | None:
         """Get the document cost for an item.
 
         :return: The PACER document cost if available, otherwise None.
@@ -141,7 +142,7 @@ class DownloadConfirmationPage(BaseReport):
             return clean_string(cost_str)
         return None
 
-    def _get_docket_number(self) -> Optional[str]:
+    def _get_docket_number(self) -> str | None:
         """Get the docket number for an item.
 
         :return: The PACER docket number if available, otherwise None.
@@ -169,7 +170,7 @@ class DownloadConfirmationPage(BaseReport):
             return clean_string(docket_number)
         return None
 
-    def _get_billable_pages(self) -> Optional[str]:
+    def _get_billable_pages(self) -> str | None:
         """Get the document billable pages.
 
         :return: The document billable pages if available, otherwise None.
@@ -186,7 +187,7 @@ class DownloadConfirmationPage(BaseReport):
             return clean_string(billable_pages_str)
         return None
 
-    def _get_document_description(self) -> Optional[str]:
+    def _get_document_description(self) -> str | None:
         """Get the document description for an item.
 
         :return: The PACER document description if available, otherwise None.
@@ -203,7 +204,7 @@ class DownloadConfirmationPage(BaseReport):
             return clean_string(document_description_str)
         return None
 
-    def _get_transaction_date(self) -> Optional[str]:
+    def _get_transaction_date(self) -> datetime | None:
         """Get the PACER transaction date.
 
         :return: The PACER transaction date if available, otherwise None.
@@ -225,10 +226,4 @@ class DownloadConfirmationPage(BaseReport):
             transaction_date_str = transaction_date_str.split("-")[-1]
 
         transaction_date_str = force_unicode(transaction_date_str)
-        transaction_date_str = convert_date_string(
-            transaction_date_str, datetime=True
-        )
-
-        if transaction_date_str:
-            return transaction_date_str
-        return None
+        return convert_date_string(transaction_date_str, datetime=True)

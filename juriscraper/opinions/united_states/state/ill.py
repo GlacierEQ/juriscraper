@@ -14,6 +14,8 @@ History:
 import re
 from datetime import date, datetime
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.html_utils import (
     get_row_column_links,
@@ -36,8 +38,9 @@ class Site(OpinionSiteLinear):
         )
         self.status = "Published"
         self.make_backscrape_iterable(kwargs)
+        self.should_have_results = True
 
-    def _get_docket(self, match: re.match) -> str:
+    def _get_docket(self, match: re.Match[str]) -> str:
         """Get docket_number from a regex match
 
         This is overriden in `illappct`
@@ -58,6 +61,15 @@ class Site(OpinionSiteLinear):
             return "Unpublished"
         return "Published"
 
+    def _get_citation(self, citation: str) -> str:
+        """Return the citation string; can be overridden for normalization.
+
+        :param citation: raw citation string from HTML
+        :return: citation string
+        """
+        return citation
+
+    @override
     def _process_html(self) -> None:
         """Process HTML
 
@@ -100,7 +112,7 @@ class Site(OpinionSiteLinear):
                 {
                     "date": date_filed,
                     "name": name,
-                    "citation": citation,
+                    "citation": self._get_citation(citation),
                     "url": url,
                     "docket": docket,
                     "status": status,
@@ -112,7 +124,7 @@ class Site(OpinionSiteLinear):
                 "This source paginates at 150 results. There are 150 results for this page. Some opinions may be lost"
             )
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range POST request
 
         :param dates: (start_date, end_date) tuple
@@ -120,14 +132,14 @@ class Site(OpinionSiteLinear):
         """
         # Make first request to get hidden input values
         self.method = "GET"
-        self.html = self._download()
+        self.html = await self._download()
 
         self.method = "POST"
         logger.info("Backscraping for range %s %s", *dates)
-        self.get_target_page(dates)
+        await self.get_target_page(dates)
         self._process_html()
 
-    def get_target_page(self, dates: tuple[date]) -> None:
+    async def get_target_page(self, dates: tuple[date, date]) -> None:
         """Makes requests until target page is loaded
         The number of requests is variable on the "__VIEWSTATE"
 
@@ -154,4 +166,4 @@ class Site(OpinionSiteLinear):
         for _ in range(2):
             vs = self.html.xpath("//input[@name='__VIEWSTATE']/@value")[0]
             self.parameters["__VIEWSTATE"] = vs
-            self.html = self._download()
+            self.html = await self._download()

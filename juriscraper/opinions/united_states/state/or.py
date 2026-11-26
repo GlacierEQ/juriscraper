@@ -3,17 +3,28 @@ History:
  - 2014-08-05: Adapted scraper to have year-based URLs.
  - 2023-11-18: Fixed and updated
  - 2025-04-23: implement extract_from_text, grossir
+ - 2025-09-23: add lower court extraction, luism
 """
 
+import asyncio
 import re
 from datetime import datetime, timedelta
 
-from juriscraper.AbstractSite import logger
+import httpx
+from typing_extensions import override
+
+from juriscraper.AbstractSite import (
+    MissingRequestResponseException,
+    UnexpectedRequestResponseException,
+    logger,
+)
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
 class Site(OpinionSiteLinear):
     court_code = "p17027coll3"
+    citation_field = "cita"
     base_url = "https://cdm17027.contentdm.oclc.org/digital/api/search/collection/{}/searchterm/{}-{}/field/dated/mode/exact/conn/and/maxRecords/200"
     # technically they have an 1870 case but just one
     first_opinion_date = datetime(1997, 8, 12)
@@ -26,20 +37,36 @@ class Site(OpinionSiteLinear):
         self.url = self.format_url(today - timedelta(15), today)
         self.make_backscrape_iterable(kwargs)
 
-    def _process_html(self):
-        for row in self.html["items"]:
-            docket, name, citation, date = (
-                x["value"] for x in row["metadataFields"]
-            )
-            if not name:
+    @override
+    async def _process_html(self) -> None:
+        for i, row in enumerate(self.html["items"]):
+            # Honor robots.txt Crawl-Delay: 1 advertised by
+            # cdm17027.contentdm.oclc.org. # 1968
+            if i and not self.test_mode_enabled():
+                await asyncio.sleep(1)
+
+            fields = {
+                metadata_row["field"]: metadata_row["value"]
+                for metadata_row in row["metadataFields"]
+            }
+            docket = fields.get("title")
+            date = fields.get("dated")
+            if not docket or not date:
+                logger.warning("Skipping row with no docket or date: %s", row)
+                continue
+
+            if not (name := fields.get("subjec")):
                 # Happens on rows like:
                 # "Miscellaneous Supreme Court dispositions, June 10 and 13, 2024"
                 logger.info("Skipping row '%s'", docket)
                 continue
 
-            judge, disposition, status, lower_court_number = self.get_details(
-                row
-            )
+            (
+                judge,
+                disposition,
+                status,
+                lower_court_number,
+            ) = await self.get_details(row)
             per_curiam = False
             if judge and judge == "PC" or "per curiam" in judge.lower():
                 per_curiam = True
@@ -51,7 +78,7 @@ class Site(OpinionSiteLinear):
                     "date": date,
                     "docket": docket.split(",")[0],
                     "url": f"https://ojd.contentdm.oclc.org/digital/api/collection/{row['collectionAlias']}/id/{row['itemId']}/download",
-                    "citation": citation,
+                    "citation": fields.get(self.citation_field, ""),
                     "judge": judge,
                     "per_curiam": per_curiam,
                     "status": status,
@@ -60,7 +87,7 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def get_details(self, row: dict) -> tuple[str, str, str, str]:
+    async def get_details(self, row: dict) -> tuple[str, str, str, str]:
         """Makes a secondary request to get details for a single
         opinion
 
@@ -86,7 +113,11 @@ class Site(OpinionSiteLinear):
             item_id = row["itemId"]
             url = f"https://cdm17027.contentdm.oclc.org/digital/api/collections/{self.court_code}/items/{item_id}/false"
             logger.debug("Getting detail JSON from %s", url)
-            self._request_url_get(url)
+            await self._request_url_get(url)
+            if self.request["response"] is None:
+                raise MissingRequestResponseException
+            if not isinstance(self.request["response"], httpx.Response):
+                raise UnexpectedRequestResponseException
             json = self.request["response"].json()
 
         if len(json["fields"]) == 1:
@@ -119,11 +150,13 @@ class Site(OpinionSiteLinear):
 
         return judge, disposition, status, lower_court_number
 
-    def _download_backwards(self, dates: tuple) -> None:
+    async def _download_backwards(
+        self, dates: tuple[datetime, datetime]
+    ) -> None:
         logger.info("Backscraping for range %s %s", *dates)
         self.url = self.format_url(*dates)
-        self.html = self._download()
-        self._process_html()
+        self.html = await self._download()
+        await self._process_html()
 
     def format_url(self, start_date: datetime, end_date: datetime) -> str:
         """
@@ -133,7 +166,8 @@ class Site(OpinionSiteLinear):
         end = datetime.strftime(end_date, "%Y%m%d")
         return self.base_url.format(self.court_code, start, end)
 
-    def extract_from_text(self, scraped_text: str) -> dict:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Extract citations from text
 
         Be careful with citations referring to other opinions that are
@@ -142,8 +176,29 @@ class Site(OpinionSiteLinear):
         See, for example:
         https://ojd.contentdm.oclc.org/digital/api/collection/p17027coll5/id/28946/download
         """
+        pattern = re.compile(
+            r"""
+                    (?:
+                        review\s+from\s+the\s+
+                        |On\s+appeal\s+from\s+the\s+
+                     )
+                    (?P<lower_court>[^.]+?)
+                    (?=\s*[.,])
+                    """,
+            re.X,
+        )
         regex = r"\n\s+(?P<cite>\d+ P3d \d+)\s+\n"
-        if match := re.search(regex, scraped_text[:1000]):
-            return {"Citation": match.group("cite")}
 
-        return {}
+        result: ExtractedMetaData = {}
+        if match := pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            if lower_court in ["Court of Appeals", "Tax Court"]:
+                lower_court = "Oregon " + lower_court
+            result["Docket"] = {"appeal_from_str": lower_court}
+
+        if match := re.search(regex, scraped_text[:1000]):
+            result["Citation"] = match.group("cite")
+
+        return result

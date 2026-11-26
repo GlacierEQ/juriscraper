@@ -1,0 +1,46 @@
+[
+  {
+    "case_names": "Johnathan Bedford Newman v. the State of Texas",
+    "nature_of_suit": "Poss of a Controlled Substance",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=f1e6d82b-5903-4d0f-9c94-e072a1218feb&coa=coa11&DT=Opinion&MediaID=97755d9b-6284-4e97-a381-dc101d57f6c5",
+        "types": "020lead"
+      }
+    ],
+    "dispositions": "Affirmed",
+    "lower_courts": "266th District Court",
+    "lower_court_judges": "Honorable Donald R. Jones, Judge",
+    "lower_court_numbers": "CR15635",
+    "court_reporter": "",
+    "case_dates": "2024-02-29",
+    "docket_numbers": "11-22-00076-CR",
+    "judges": "",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  },
+  {
+    "case_names": "Andres Lee Schuman Jr. v. the State of Texas",
+    "nature_of_suit": "Aggravated Robbery",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=b07725c3-4008-456b-80f3-7a162c95d8ff&coa=coa11&DT=Opinion&MediaID=e73e40e8-628b-4274-9bcc-1cfaa8852107",
+        "types": "020lead"
+      }
+    ],
+    "dispositions": "Affirmed",
+    "lower_courts": "441st District Court",
+    "lower_court_judges": "Honorable Jeffrey Todd Robnett, Judge",
+    "lower_court_numbers": "CR54799",
+    "court_reporter": "",
+    "case_dates": "2024-02-29",
+    "docket_numbers": "11-22-00300-CR",
+    "judges": "",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  }
+]

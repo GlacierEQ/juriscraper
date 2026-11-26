@@ -1,0 +1,50 @@
+[
+  {
+    "case_names": "Ken Paxton, in His Official Capacity as Attorney General for the State of Texas and the Office of the Attorney General for the State of Texas v. Delia Garza, in Her Official Capacity as Travis County Attorney; John Creuzot, in His Official Capacity as Dallas County Criminal District Attorney; And Brian Middleton, in His Official Capacity as District Attorney of Fort Bend County (268th Judicial District)",
+    "nature_of_suit": "Injunction",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=b70d924f-45ba-4b08-9a57-e49bac3903a0&coa=coa15&DT=Opinion&MediaID=c906c934-ea71-4c72-8a48-5f3628ef31fa",
+        "types": "030concurrence"
+      },
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=40808f49-0c30-4374-b60f-96796950cc09&coa=coa15&DT=Opinion&MediaID=0c39e998-4180-43e5-9521-95492047c6e2",
+        "types": "020lead"
+      }
+    ],
+    "dispositions": "AFFIRMED IN PART AND REVERSED AND REMANDED IN PART",
+    "lower_courts": "459th District Court",
+    "lower_court_judges": "Honorable Catherine Mauzy",
+    "lower_court_numbers": "D-1-GN-25-003445",
+    "court_reporter": "Melinda M. Walker",
+    "case_dates": "2025-12-30",
+    "docket_numbers": "15-25-00116-CV",
+    "judges": "",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  },
+  {
+    "case_names": "Javier Vasquez and RJT Commercial, Inc. v. Moises Tonche Vargas, Maria Vargas, Individually and as Next Friend of S.A v. and E.I v. Minors and Saul Vargas",
+    "nature_of_suit": "Restricted Appeal",
+    "sub_opinions": [
+      {
+        "download_urls": "https://search.txcourts.gov/SearchMedia.aspx?MediaVersionID=b43d8604-5bf3-4276-930b-2f26ccfeb788&coa=coa15&DT=Opinion&MediaID=aa53a5af-7ad5-49a6-847c-0d67584c77c6",
+        "types": "020lead"
+      }
+    ],
+    "dispositions": "VACATED AND DISMISSED",
+    "lower_courts": "13th District Court",
+    "lower_court_judges": "Honorable James E. Lagomarsino",
+    "lower_court_numbers": "D18-27341-CV",
+    "court_reporter": "Jennifer Aulds",
+    "case_dates": "2025-12-30",
+    "docket_numbers": "15-25-00080-CV",
+    "judges": "",
+    "case_name_shorts": "",
+    "date_filed_is_approximate": false,
+    "blocked_statuses": false,
+    "precedential_statuses": "Published"
+  }
+]

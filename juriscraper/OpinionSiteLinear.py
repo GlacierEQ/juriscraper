@@ -1,3 +1,7 @@
+from collections.abc import Awaitable
+
+from typing_extensions import override
+
 from juriscraper.lib.string_utils import convert_date_string
 from juriscraper.OpinionSite import OpinionSite
 
@@ -43,6 +47,9 @@ class OpinionSiteLinear(OpinionSite):
         "other_date",
         "attorney",
         "headnote",
+        # the downloaded content from download_url
+        # cl_scrape_opinions is ready to consume this if present
+        "content",
     }
 
     def __init__(self, *args, **kwargs):
@@ -50,7 +57,8 @@ class OpinionSiteLinear(OpinionSite):
         self.cases = []
         self.status = None
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None | Awaitable[None]:
         raise Exception(
             "Must implement _process_html() on OpinionSiteLinear child"
         )
@@ -94,6 +102,7 @@ class OpinionSiteLinear(OpinionSite):
     def _get_optional_field_by_id(self, id):
         if self.cases and id in self.cases[0]:
             return [case[id] for case in self.cases]
+        return None
 
     def _get_judges(self):
         return self._get_optional_field_by_id("judge")
@@ -166,6 +175,10 @@ class OpinionSiteLinear(OpinionSite):
     def _get_headnotes(self):
         """Goes into OpinionCluster.headnotes, type: string"""
         return self._get_optional_field_by_id("headnote")
+
+    def _get_content(self):
+        """Goes into Opinion.html or Opinion.plain_text"""
+        return self._get_optional_field_by_id("content")
 
     def _check_sanity(self):
         super()._check_sanity()

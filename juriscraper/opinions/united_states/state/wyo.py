@@ -10,10 +10,12 @@ History:
 
 import re
 from datetime import date, datetime
-from typing import Optional
 from urllib.parse import urlencode
 
+from typing_extensions import override
+
 from juriscraper.AbstractSite import logger
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -21,7 +23,9 @@ class Site(OpinionSiteLinear):
     date_re = re.compile(r"^/Date\((\d+)\)/$")
     base_url = "http://www.courts.state.wy.us"
     api_url = "https://opinions.courts.state.wy.us/Home/GetOpinions"
-    document_url = "https://documents.courts.state.wy.us/Opinions"
+    document_url = (
+        "https://stwjbopinions.blob.core.usgovcloudapi.net/wsc-opinions"
+    )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -30,6 +34,7 @@ class Site(OpinionSiteLinear):
         self.make_backscrape_iterable(kwargs)
         self.status = "Published"
 
+    @override
     def _process_html(self) -> None:
         """Process HTML into case dictionaries
 
@@ -58,7 +63,7 @@ class Site(OpinionSiteLinear):
             )
 
     def set_url(
-        self, start: Optional[date] = None, end: Optional[date] = None
+        self, start: date | None = None, end: date | None = None
     ) -> None:
         """Sets self.url
 
@@ -82,7 +87,9 @@ class Site(OpinionSiteLinear):
         else:
             self.url = self.api_url
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(
+        self, dates: tuple[date | None, date]
+    ) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -90,9 +97,10 @@ class Site(OpinionSiteLinear):
         """
         logger.info("Backscraping for range %s %s", *dates)
         self.set_url(*dates)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
         by caller, and parses them accordingly
@@ -114,3 +122,32 @@ class Site(OpinionSiteLinear):
             end = datetime.now()
 
         self.back_scrape_iterable = [(start, end)]
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract lower court from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+        metadata: ExtractedMetaData = {}
+        lower_court_pattern = re.compile(
+            r"Appeal\s+from\s+the\s+(?P<lower_court>.*?)[,\n]\s*The\s+Honorable\s+(?P<judge>.+?),\s*Judge",
+            re.DOTALL,
+        )
+        lower_court = ""
+        lower_court_judge = ""
+        if match := lower_court_pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            lower_court_judge = match.group("judge").strip()
+
+        if lower_court:
+            metadata.setdefault("Docket", {})["appeal_from_str"] = lower_court
+        if lower_court_judge:
+            metadata.setdefault("OriginatingCourtInformation", {})[
+                "assigned_to_str"
+            ] = lower_court_judge
+
+        return metadata

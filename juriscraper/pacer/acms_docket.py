@@ -1,8 +1,12 @@
 import json
+import pathlib
 import pprint
 import re
 import sys
 from collections import OrderedDict
+
+from httpx import Response
+from typing_extensions import override
 
 from juriscraper.lib.html_utils import strip_bad_html_tags_insecure
 from juriscraper.lib.log_tools import make_default_logger
@@ -17,12 +21,15 @@ logger = make_default_logger()
 class ACMSDocketReport(AppellateDocketReport):
     """Parse ACMS docket JSON."""
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         super().__init__(court_id, pacer_session)
-        self._acms_json = None
-        self.api_client = AcmsApiClient(pacer_session, court_id)
+        self._acms_json: dict | None = None
+        self.api_client: AcmsApiClient | None = None
+        if pacer_session is not None:
+            self.api_client = AcmsApiClient(pacer_session, court_id)
 
-    def _parse_text(self, text):
+    @override
+    def _parse_text(self, text: str) -> None:
         """Store the ACMS JSON
 
         This does not, in fact, actually *parse* the data, it
@@ -34,26 +41,147 @@ class ACMSDocketReport(AppellateDocketReport):
         """
         self._acms_json = json.loads(text)
 
-    def query(self, case_id: str):
+    async def query(self, case_id: str):
         """
         Queries the court API for case and docket details for a given case ID.
 
         :param case_id: The unique identifier of the case to query.
         """
-        assert self.session is not None, (
-            "session attribute of AppellateDocketReport cannot be None."
-        )
+        if self.api_client is None:
+            raise AssertionError("session attribute cannot be None.")
+
         # Fetch Case Details
-        case_data = self.api_client.get_case_details(case_id)
+        case_data = await self.api_client.get_case_details(case_id)
 
         # Fetch Docket Entry Details
-        entry_details = self.api_client.get_docket_entries(case_id)
+        entry_details = await self.api_client.get_docket_entries(case_id)
 
         # Combine and store results
         self._acms_json = {
             "caseDetails": case_data,
             "docketInfo": entry_details,
         }
+        self.is_valid = True
+
+    @staticmethod
+    def _find_case(cases: list[dict], docket_number: str) -> dict | None:
+        """Find the case whose number exactly matches ``docket_number``.
+
+        IndexContent may return multiple cases matching the identifier,
+        including related cases or near-matches.
+
+        :param cases: The ``caseDetails`` list from the view model.
+        :param docket_number: The requested docket number.
+        :return: The matching case, or None if no exact match is found.
+        """
+        requested_number = docket_number.strip()
+
+        for case in cases:
+            case_number = str(case.get("caseNumber") or "").strip()
+            if case_number == requested_number:
+                return case
+
+        return None
+
+    async def query_by_docket_number(self, docket_number: str) -> None:
+        """Look a case up by its docket number and load its docket.
+
+        This is the entry point when only the docket number is known. It
+        reads the IndexContent page, which also supplies the API token the
+        other requests need, so no call to the API has to precede it. Docket
+        entries are taken from the page when it includes them and fetched
+        from the API otherwise.
+
+        ``data`` is empty when none of the cases ACMS lists for the number
+        carries it exactly.
+
+        :param docket_number: The appellate docket number, e.g. ``26-7519``.
+        """
+        if self.api_client is None:
+            raise AssertionError("session attribute cannot be None.")
+
+        view_model = await self.api_client.get_index_content(docket_number)
+        cases = view_model.get("caseDetails") or []
+        case_details = self._find_case(cases, docket_number)
+        if case_details is None:
+            logger.info(
+                "No ACMS case found for %s %s", self.court_id, docket_number
+            )
+            self._acms_json = None
+            self.is_valid = False
+            return
+
+        # Entries embedded in the page can only be trusted to belong to the
+        # matched case when it is the only one listed.
+        docket_info = view_model.get("docketInfo")
+        if docket_info is None or len(cases) > 1:
+            docket_info = await self.api_client.get_docket_entries(
+                case_details["caseId"]
+            )
+        self._acms_json = {
+            "caseDetails": case_details,
+            "docketInfo": docket_info,
+        }
+        self.is_valid = True
+
+    async def download_pdf(
+        self, entry_id: str, doc_id: str
+    ) -> tuple[Response | None, str]:
+        """
+        Downloads a PDF for a given docket entry and document ID.
+
+        This method retrieves the list of documents associated with the given
+        entry, validates the provided document ID, and then requests the PDF
+        download from the API client.
+
+        :param entry_id: The identifier of the docket entry.
+        :param doc_id: The identifier of the document within the entry.
+                    If not provided and only one document exists,
+                    that document is used by default.
+        :return: A tuple containing:
+                - Response object if the PDF download was successful, otherwise
+                 None.
+                - An error message string if an issue occurred, otherwise an
+                 empty string.
+        """
+        if self.api_client is None:
+            raise AssertionError("session attribute cannot be None.")
+
+        # Fetch all documents for given entry
+        attachment_list = await self.api_client.get_attachments(
+            entry_id, False, False
+        )
+        if not attachment_list:
+            return None, "No documents found for the given entry."
+
+        # Case: multiple documents found but no document ID provided
+        if not doc_id and len(attachment_list) > 1:
+            error_message = (
+                "Multiple documents found for this entry. Please "
+                "provide a document ID."
+            )
+            return None, error_message
+
+        # Determine which document data to use
+        if not doc_id:
+            doc_data = attachment_list[0]
+        else:
+            doc_data = next(
+                filter(
+                    lambda v: v["docketDocumentDetailsId"] == doc_id,
+                    attachment_list,
+                ),
+                None,
+            )
+            if not doc_data:
+                return None, f"Document ID '{doc_id}' not found in this entry."
+
+        r = await self.api_client.download_pdf(
+            doc_data["docketDocumentDetailsId"],
+            doc_data["pageCount"],
+            doc_data["documentUrl"],
+        )
+        return r, ""
 
     @property
     def metadata(self):
@@ -61,6 +189,8 @@ class ACMSDocketReport(AppellateDocketReport):
 
         That function then supplements it with parties and docket entries.
         """
+        if self._acms_json is None:
+            raise AssertionError("_acms_json is absent.")
 
         caseDetails = self._acms_json["caseDetails"]
 
@@ -276,6 +406,8 @@ class ACMSDocketReport(AppellateDocketReport):
         # Within that, the first <td> is the party name.
         # The second <td> is the atty list.
         # Within the atty list, there is one <div> per attorney.
+        if self._acms_json is None:
+            raise AssertionError("_acms_json is absent.")
 
         parties_html = self._acms_json["caseDetails"]["partyAttorneyList"]
         tree = strip_bad_html_tags_insecure(parties_html)
@@ -305,7 +437,9 @@ class ACMSDocketReport(AppellateDocketReport):
         for party in parties:
             for attorney in party.get("attorneys", []):
                 if re.search(r"see\s+above", attorney.get("attorneys", "")):
-                    assert "Unexpected SEE ABOVE found in ACMS attorney list"
+                    raise AssertionError(
+                        "Unexpected SEE ABOVE found in ACMS attorney list"
+                    )
 
         return parties
 
@@ -326,6 +460,8 @@ class ACMSDocketReport(AppellateDocketReport):
         to the HTML markup we would otherwise lose.
 
         """
+        if self._acms_json is None:
+            raise AssertionError("_acms_json is absent.")
 
         docket_entries = []
         for row in self._acms_json["docketInfo"]["docketEntries"]:
@@ -406,7 +542,7 @@ def _main():
     report = ACMSDocketReport("ca9")
     filepath = sys.argv[1]
     print(f"Parsing JSON file at {filepath}")
-    with open(filepath) as f:
+    with pathlib.Path(filepath).open() as f:
         text = f.read()
     report._parse_text(text)
     pprint.pprint(report.data, indent=2)

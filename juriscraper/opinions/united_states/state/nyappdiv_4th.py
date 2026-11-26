@@ -2,17 +2,10 @@
 # CourtID: nyappdiv_4th
 from datetime import date
 
-from juriscraper.opinions.united_states.state import ny
-from juriscraper.OpinionSite import OpinionSite
+from juriscraper.opinions.united_states.state import nyappdiv_1st
 
 
-class Site(ny.Site):
+class Site(nyappdiv_1st.Site):
     first_opinion_date = date(2003, 9, 25)
     days_interval = 30
-    extract_from_text = OpinionSite.extract_from_text
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.court_id = self.__module__
-        self.court = "App Div, 4th Dept"
-        self._set_parameters()
+    court = "App Div, 4th Dept"

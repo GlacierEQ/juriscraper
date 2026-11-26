@@ -1,10 +1,12 @@
 import re
 from datetime import date, datetime, timedelta
-from typing import Any, Optional
 from urllib.parse import urlencode
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -28,6 +30,7 @@ class Site(OpinionSiteLinear):
         self.set_url()
         self.make_backscrape_iterable(kwargs)
 
+    @override
     def _process_html(self) -> None:
         """Parse HTML into case dictionaries
 
@@ -57,13 +60,12 @@ class Site(OpinionSiteLinear):
             status = "Unknown"
             metadata = row.xpath(".//div[@class='subMetadata']/span/text()")
             if metadata:
-                status = (
-                    "Published"
-                    if "Reported" in metadata[-1]
-                    else "Unpublished"
-                )
-            else:
-                status = "Unknown"
+                if "Reported" in metadata[-1] or "Slip" in metadata[-1]:
+                    status = "Published"
+                elif "Unreported" in metadata[-1]:
+                    status = "Unpublished"
+                else:
+                    status = "Unknown"
 
             self.cases.append(
                 {
@@ -77,7 +79,7 @@ class Site(OpinionSiteLinear):
             )
 
     def set_url(
-        self, start: Optional[date] = None, end: Optional[date] = None
+        self, start: date | None = None, end: date | None = None
     ) -> None:
         """Formats and sets `self.url` with date inputs
 
@@ -108,7 +110,7 @@ class Site(OpinionSiteLinear):
         }
         self.url = f"{self.base_url}?{urlencode(params)}"
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -116,23 +118,40 @@ class Site(OpinionSiteLinear):
         """
         logger.info("Backscraping for range %s %s", *dates)
         self.set_url(*dates)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
-    def extract_from_text(self, scraped_text: str) -> dict[str, Any]:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Pass scraped text into function and return data as a dictionary
 
         :param scraped_text: Text of scraped content
         :return: metadata
         """
+        metadata: ExtractedMetaData = {}
         docket_number = re.findall(r"N[oO]\.\s(.*)", scraped_text)
-        if not docket_number:
-            logger.error("nm: unable to extract_from_text a docket_number")
-            return {}
+        if docket_number:
+            metadata.setdefault("OpinionCluster", {})["docket_number"] = (
+                docket_number[0]
+            )
 
-        metadata = {
-            "OpinionCluster": {
-                "docket_number": docket_number[0],
-            },
-        }
+        lower_court_regex = re.compile(
+            r"APPEAL FROM THE (?P<lower_court>.+)\n\s*\d*\s*(?P<lower_court_judge>.+), District (?:Court )?Judge"
+        )
+
+        if match := lower_court_regex.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            metadata.setdefault("Docket", {})["appeal_from_str"] = titlecase(
+                lower_court
+            )
+
+            lower_court_judge = re.sub(
+                r"\s+", " ", match.group("lower_court_judge")
+            ).strip()
+            metadata.setdefault("OriginatingCourtInformation", {})[
+                "assigned_to_str"
+            ] = titlecase(lower_court_judge)
+
         return metadata

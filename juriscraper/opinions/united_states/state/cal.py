@@ -1,5 +1,8 @@
 import re
 
+from typing_extensions import override
+
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -7,19 +10,31 @@ class Site(OpinionSiteLinear):
     court_code = "S"
     division = ""
     date_regex = re.compile(r" \d\d?/\d\d?/\d\d| filed")
+    # Unpublished titles end with the district and division, e.g. "CA4/1"
+    court_suffix_regex = re.compile(r"\s+CA\d(/\d)?$")
 
     def __init__(self, *args, **kwargs):
+        kwargs.setdefault("verify", False)
         super().__init__(*args, **kwargs)
         self.court_id = self.__module__
-        self.url = f"https://www.courts.ca.gov/cms/opinions.htm?Courts={self.court_code}"
-        self.status = "Published"
-        self.request["verify"] = False
+        # Unpublished opinions have their own page, scraped by the `_u` modules
+        if self.court_id.endswith("_u"):
+            self.status = "Unpublished"
+            page = "npopinions"
+        else:
+            self.status = "Published"
+            page = "opinions"
+        self.url = f"https://www.courts.ca.gov/cms/{page}.htm?Courts={self.court_code}"
+        self.should_have_results = True
 
+    @override
     def _process_html(self) -> None:
         for row in self.html.xpath("//table/tr[not(th)]"):
             name = row.xpath(".//*[@class='op-title']/text()")[0]
 
-            split = self.date_regex.split(name)[0]
+            split = self.court_suffix_regex.sub(
+                "", self.date_regex.split(name)[0]
+            )
             if "P. v. " in split:
                 case_name = split.replace("P. ", "People ")
             else:
@@ -38,3 +53,40 @@ class Site(OpinionSiteLinear):
                 case["division"] = self.division
 
             self.cases.append(case)
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract lower court and case number from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+        pattern = re.compile(
+            r"S\d+\s*\n"
+            r"(?P<lower_court>.+?)\s*$"
+            r"(\s*\n\s*)"
+            r"(?P<lower_court_number>[A-Z0-9]{4,})\s*$",
+            re.MULTILINE,
+        )
+
+        lower_court = ""
+        lower_court_number = ""
+
+        if match := pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            lower_court_number = match.group("lower_court_number").strip()
+
+        result: ExtractedMetaData = {}
+        if lower_court or lower_court_number:
+            if lower_court:
+                result["Docket"] = {}
+                result["Docket"]["appeal_from_str"] = lower_court
+            if lower_court_number:
+                result["OriginatingCourtInformation"] = {}
+                result["OriginatingCourtInformation"]["docket_number"] = (
+                    lower_court_number
+                )
+
+        return result

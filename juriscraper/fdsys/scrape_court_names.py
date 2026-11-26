@@ -1,11 +1,17 @@
+import asyncio
 import json
+import pathlib
 
-import requests
+import httpx
 from lxml import etree, html
 
 
-def get_court_names():
-    response = requests.get("https://www.courtlistener.com/api/jurisdictions/")
+async def get_court_names(**kwargs):
+    kwargs.setdefault("http2", True)
+    async with httpx.AsyncClient(**kwargs) as client:
+        response = await client.get(
+            "https://www.courtlistener.com/api/jurisdictions/"
+        )
     tree = html.fromstring(response.text)
 
     data = {}
@@ -16,17 +22,18 @@ def get_court_names():
         if pre and name:
             data[pre[0].strip()] = name[0].strip()
 
-    with open("./court_names.json", "w") as f:
+    with pathlib.Path("./court_names.json").open("w") as f:
         json.dump(data, f)
 
 
-def get_fdsys_court_names():
-    response = requests.get(
-        "https://www.gpo.gov/smap/fdsys/sitemap_2014/2014_USCOURTS_sitemap.xml",
-        stream=True,
-    )
-    response.raw.decode_content = True
-    tree = etree.parse(response.raw)
+async def get_fdsys_court_names(**kwargs):
+    kwargs.setdefault("http2", True)
+    async with httpx.AsyncClient(**kwargs) as client:
+        response = await client.get(
+            "https://www.gpo.gov/smap/fdsys/sitemap_2014/2014_USCOURTS_sitemap.xml",
+        )
+        tree = etree.parse(await response.aread())
+
     data = {}
 
     for url in tree.xpath(
@@ -40,10 +47,10 @@ def get_fdsys_court_names():
         # if pre not in data and url:
         data[pre] = url
 
-    with open("./fdsys_court_names_2014.json", "w") as f:
+    with pathlib.Path("./fdsys_court_names_2014.json").open("w") as f:
         json.dump(data, f)
 
 
 if __name__ == "__main__":
     # get_court_names()
-    get_fdsys_court_names()
+    asyncio.run(get_fdsys_court_names())

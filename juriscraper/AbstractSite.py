@@ -1,16 +1,29 @@
+import gzip
 import hashlib
+import http.cookiejar
+import inspect
 import json
-from datetime import date, datetime, timedelta
+import pathlib
+import ssl
+import urllib.parse
+import urllib.request
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+from http.client import HTTPResponse
+from typing import Literal, TypedDict
 
 import certifi
-import requests
+import httpx
+from charset_normalizer import from_bytes
 
 from juriscraper.lib.date_utils import (
-    fix_future_year_typo,
     json_date_handler,
     make_date_range_tuples,
 )
-from juriscraper.lib.exceptions import InsanityException
+from juriscraper.lib.exceptions import (
+    InsanityException,
+    JuriscraperException,
+)
 from juriscraper.lib.html_utils import (
     clean_html,
     fix_links_in_lxml_tree,
@@ -19,16 +32,39 @@ from juriscraper.lib.html_utils import (
     set_response_encoding,
 )
 from juriscraper.lib.log_tools import make_default_logger
-from juriscraper.lib.network_utils import SSLAdapter
+from juriscraper.lib.microservices_utils import follow_redirections
 from juriscraper.lib.string_utils import (
     CaseNameTweaker,
-    clean_string,
-    harmonize,
     trunc,
 )
-from juriscraper.lib.test_utils import MockRequest
+from juriscraper.lib.utils import (
+    check_download_url,
+    check_empty_downloaded_file,
+    check_expected_content_types,
+    clean_attribute,
+    sanity_check_case_names,
+    sanity_check_dates,
+)
 
 logger = make_default_logger()
+
+
+class SiteRequest(TypedDict):
+    session: httpx.AsyncClient
+    headers: dict[str, str]
+    parameters: dict  # TODO: use a stricter type.
+    request: None  # TODO: Probably unused; remove
+    response: httpx.Response | HTTPResponse | None
+    status: None  # TODO: Probably unused; remove
+    url: str | None
+
+
+class MissingRequestResponseException(JuriscraperException):
+    """Raised when `request["response"]` is needed but unavailable."""
+
+
+class UnexpectedRequestResponseException(JuriscraperException):
+    """Raised when `request["response"]` is the wrong type - use_urllib is misconfigured."""
 
 
 class AbstractSite:
@@ -38,22 +74,64 @@ class AbstractSite:
     Should not contain lists that can't be sorted by the _date_sort function.
     """
 
-    def __init__(self, cnt=None, **kwargs):
+    # Set to True in subclasses to use urllib instead of httpx.
+    # Useful for sites that block httpx via TLS fingerprinting.
+    use_urllib = False
+
+    # Some courts' bot management blocks the "Juriscraper" User-Agent, and
+    # some also block browser User-Agents that have gone stale. Scrapers that
+    # need to look like a browser should use `self.chrome_user_agent` instead
+    # of hardcoding a string, so a single bump here updates all of them.
+    # Keep in sync with the current stable Chrome release.
+    chrome_version = "151"
+    chrome_user_agent = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        f"(KHTML, like Gecko) Chrome/{chrome_version}.0.0.0 Safari/537.36"
+    )
+    # Client hints matching `chrome_user_agent`, for sites that check them
+    chrome_sec_ch_ua = (
+        f'"Google Chrome";v="{chrome_version}", '
+        f'"Chromium";v="{chrome_version}", "Not)A;Brand";v="24"'
+    )
+
+    def __init__(
+        self,
+        cnt: CaseNameTweaker | None = None,
+        user_agent: str = "Juriscraper",
+        **kwargs,
+    ):
         super().__init__()
 
         # Computed metadata
-        self.hash = None
+        self.hash: str | None = None
         self.html = None
-        self.method = "GET"
+        self.method: Literal["GET", "POST", "LOCAL"] = "GET"
         self.back_scrape_iterable = None
-        self.downloader_executed = False
-        self.cookies = {}
-        self.cnt = cnt or CaseNameTweaker()
-        self.request = {
-            "verify": certifi.where(),
-            "session": requests.session(),
+        self.downloader_executed: bool = False
+        self.cookies: dict[str, str] = {}
+        self.cnt: CaseNameTweaker = cnt or CaseNameTweaker()
+        self.user_agent: str = user_agent
+
+        # Attribute to reference a function passed by the caller,
+        # which takes a single argument, the Site object, after
+        # each GET or POST request. Intended for saving the response for
+        # debugging purposes.
+        self.save_response: Callable[[AbstractSite], None] | None = kwargs.pop(
+            "save_response_fn", None
+        )
+
+        # Won't affect the values of the child scraper as these only get
+        # passed to httpx at this stage.
+        kwargs.pop("backscrape_start", None)
+        kwargs.pop("backscrape_end", None)
+        kwargs.pop("days_interval", None)
+        kwargs.setdefault("follow_redirects", True)
+        kwargs.setdefault("http2", True)
+        kwargs.setdefault("verify", True)
+        self.request: SiteRequest = {
+            "session": httpx.AsyncClient(**kwargs),
             "headers": {
-                "User-Agent": "Juriscraper",
+                "User-Agent": self.user_agent,
                 # Disable CDN caching on sites like SCOTUS (ahem)
                 "Cache-Control": "no-cache, max-age=0, must-revalidate",
                 # backwards compatibility with HTTP/1.0 caches
@@ -61,32 +139,44 @@ class AbstractSite:
             },
             "parameters": {},
             "request": None,
+            "response": None,
             "status": None,
             "url": None,
         }
 
-        # Attribute to reference a function passed by the caller,
-        # which takes a single argument, the Site object, after
-        # each GET or POST request. Intended for saving the response for
-        # debugging purposes.
-        self.save_response = kwargs.get("save_response_fn")
-
         # Some courts will block Juriscraper or Courtlistener's user-agent
         # or may need special headers. This flag let's the caller know it
         # should use the modified `self.request["headers"]`
-        self.needs_special_headers = False
+        self.needs_special_headers: bool = False
+
+        # urllib opener for sites that need TLS fingerprint bypass
+        if self.use_urllib:
+            cookie_jar = http.cookiejar.CookieJar()
+            self.urllib_opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(cookie_jar)
+            )
+
+        # indicates whether the scraper should have results or not to raise an error
+        self.should_have_results: bool = False
+
+        # has defaults in OpinionSite and OralArgumentSite. Empty means "expect any"
+        self.expected_content_types: list[str] = []
 
         # Sub-classed metadata
         self.court_id = None
         self.url = None
+        self.mock_url: str | None = None
         self.parameters = None
-        self.uses_selenium = None
-        self._opt_attrs = []
-        self._req_attrs = []
-        self._all_attrs = []
+        self._opt_attrs: list[str] = []
+        self._req_attrs: list[str] = []
+        self._all_attrs: list[str] = []
 
-    def __del__(self):
-        self.close_session()
+    async def __aenter__(self):
+        await self.request["session"].__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.request["session"].__aexit__(exc_type, exc_value, traceback)
 
     def __str__(self):
         out = []
@@ -95,7 +185,7 @@ class AbstractSite:
         return "\n".join(out)
 
     def __iter__(self):
-        for i in range(0, len(self.case_names)):
+        for i in range(len(self.case_names)):
             yield self._make_item(i)
 
     def __getitem__(self, i):
@@ -104,9 +194,9 @@ class AbstractSite:
     def __len__(self):
         return len(self.case_names)
 
-    def close_session(self):
+    async def close_session(self):
         if self.request["session"]:
-            self.request["session"].close()
+            await self.request["session"].aclose()
 
     def _make_item(self, i):
         """Using i, convert a single item into a dict. This is effectively a
@@ -126,20 +216,15 @@ class AbstractSite:
         """Use this for debugging purposes"""
         print(get_html_from_element(element))
 
-    def disable_certificate_verification(self):
-        """Scrapers that require this due to website misconfiguration
-        should be checked periodically--calls to this method from
-         site scrapers should be removed when no longer necessary.
-        """
-        self.request["verify"] = False
-
     def set_custom_adapter(self, cipher: str):
-        """Set Custom SSL/TLS Adapter for out of date court systems
+        """Set Custom SSL/TLS cipher for out of date court systems
 
         :param cipher: The court required cipher
         :return: None
         """
-        self.request["session"].mount("https://", SSLAdapter(ciphers=cipher))
+        ctx = ssl.create_default_context(cafile=certifi.where())
+        ctx.set_ciphers(cipher)
+        return ctx
 
     def test_mode_enabled(self):
         return self.method == "LOCAL"
@@ -150,18 +235,24 @@ class AbstractSite:
             default=json_date_handler,
         )
 
-    def parse(self):
+    async def parse(self):
         if not self.downloader_executed:
             # Run the downloader if it hasn't been run already
-            self.html = self._download()
+            self.html = await self._download()
 
             # Process the available html (optional)
-            self._process_html()
+            maybe_awaitable = self._process_html()
+            if isinstance(maybe_awaitable, Awaitable):
+                await maybe_awaitable
 
         # Set the attribute to the return value from _get_foo()
         # e.g., this does self.case_names = _get_case_names()
         for attr in self._all_attrs:
-            self.__setattr__(attr, getattr(self, f"_get_{attr}")())
+            get_attr = getattr(self, f"_get_{attr}")
+            if inspect.iscoroutinefunction(get_attr):
+                self.__setattr__(attr, await get_attr())
+            else:
+                self.__setattr__(attr, get_attr())
 
         self._clean_attributes()
         if "case_name_shorts" in self._all_attrs:
@@ -180,7 +271,6 @@ class AbstractSite:
         Does nothing, but provides a hook that allows inheriting objects to
         tweak the requests object if necessary.
         """
-        pass
 
     def _clean_text(self, text):
         """A hook for subclasses to override if needed."""
@@ -190,26 +280,28 @@ class AbstractSite:
         """Iterate over attribute values and clean them"""
         for attr in self._all_attrs:
             item = getattr(self, attr)
-            if item is not None:
-                cleaned_item = []
-                for sub_item in item:
-                    if attr == "download_urls":
-                        sub_item = sub_item.strip()
-                    else:
-                        if isinstance(sub_item, str):
-                            sub_item = clean_string(sub_item)
-                        elif isinstance(sub_item, datetime):
-                            sub_item = sub_item.date()
-                        if attr in ["case_names", "docket_numbers"]:
-                            sub_item = harmonize(sub_item)
-                    cleaned_item.append(sub_item)
-                self.__setattr__(attr, cleaned_item)
+            if item is None:
+                continue
+
+            cleaned_item = [
+                clean_attribute(attr, sub_item) for sub_item in item
+            ]
+
+            self.__setattr__(attr, cleaned_item)
 
     def _post_parse(self):
         """This provides an hook for subclasses to do custom work on the data
         after the parsing is complete.
         """
-        pass
+
+    def no_results_warning(self) -> None:
+        if self.should_have_results:
+            logger.error(
+                "%s: Returned with zero items, but should have results.",
+                self.court_id,
+            )
+        else:
+            logger.warning("%s: Returned with zero items.", self.court_id)
 
     def _check_sanity(self):
         """Check that the objects attributes make sense:
@@ -231,10 +323,12 @@ class AbstractSite:
         If sanity is OK, no return value. If not, throw InsanityException or
         warnings, as appropriate.
         """
+        # check that all attributes have the same length
         lengths = {}
         for attr in self._all_attrs:
             if self.__getattribute__(attr) is not None:
                 lengths[attr] = len(self.__getattribute__(attr))
+
         values = list(lengths.values())
         if values.count(values[0]) != len(values):
             # Are all elements equal?
@@ -242,75 +336,39 @@ class AbstractSite:
                 "%s: Scraped meta data fields have differing"
                 " lengths: %s" % (self.court_id, lengths)
             )
-        if len(self.case_names) == 0:
-            logger.warning(f"{self.court_id}: Returned with zero items.")
-        else:
-            for field in self._req_attrs:
-                if self.__getattribute__(field) is None:
-                    raise InsanityException(
-                        "%s: Required fields do not contain any data: %s"
-                        % (self.court_id, field)
-                    )
-            prior_case_name = None
-            for i, name in enumerate(self.case_names):
-                if not name.strip():
-                    raise InsanityException(
-                        "Item with index %s has an empty case name. The prior "
-                        "item had case name of: %s" % (i, prior_case_name)
-                    )
-                prior_case_name = name
-
-        future_date_count = 0
-        for index, case_date in enumerate(self.case_dates):
-            if not isinstance(case_date, date):
-                raise InsanityException(
-                    "%s: member of case_dates list not a valid date object. "
-                    "Instead it is: %s with value: %s"
-                    % (self.court_id, type(case_date), case_date)
-                )
-            # Sanitize case date, fix typo of current year if present
-            fixed_date = fix_future_year_typo(case_date)
-            case_name = self.case_names[index]
-            if fixed_date != case_date:
-                logger.info(
-                    "Date year typo detected. Converting %s to %s "
-                    "for case '%s' in %s",
-                    case_date,
-                    fixed_date,
-                    case_name,
-                    self.court_id,
-                )
-                case_date = fixed_date
-                self.case_dates[index] = fixed_date
-
-            # If a date is approximate, then it may be set in the future until
-            # half of the year has passed. Ignore this case
-            if hasattr(self, "date_filed_is_approximate"):
-                date_is_approximate = self.date_filed_is_approximate[index]
-            else:
-                date_is_approximate = False
-
-            # dates should not be in the future. Tolerate a week
-            if not date_is_approximate and case_date > (
-                date.today() + timedelta(days=7)
-            ):
-                future_date_count += 1
-                error = f"{self.court_id}: {case_date} date is in the future. Case '{case_name}'"
-                logger.error(error)
-
-                # Interrupt data ingestion if more than 1 record has a bad date
-                if future_date_count > 1:
-                    raise InsanityException(
-                        f"More than 1 case has a date in the future. Last case: {error}"
-                    )
 
         if not isinstance(self.cookies, dict):
             raise InsanityException(
                 "self.cookies not set to be a dict by scraper."
             )
+
+        # check that we have data
+        if len(self.case_names) == 0:
+            self.no_results_warning()
+            return
+
+        # check that all require fields have data
+        for field in self._req_attrs:
+            if self.__getattribute__(field) is None:
+                raise InsanityException(
+                    "%s: Required fields do not contain any data: %s"
+                    % (self.court_id, field)
+                )
+
+        sanity_check_case_names(self.case_names)
+        date_filed_is_approximate = getattr(
+            self, "date_filed_is_approximate", [False for _ in self.case_names]
+        )
+
+        sanity_check_dates(
+            zip(self.case_dates, self.case_names, date_filed_is_approximate),
+            self.court_id,
+        )
+
         logger.info(
-            "%s: Successfully found %s items."
-            % (self.court_id, len(self.case_names))
+            "%s: Successfully found %s items.",
+            self.court_id,
+            len(self.case_names),
         )
 
     def _date_sort(self):
@@ -346,7 +404,7 @@ class AbstractSite:
         """
         return get_html_parsed_text(text)
 
-    def _download(self, request_dict=None):
+    async def _download(self, request_dict=None):
         """Download the latest version of Site"""
         if request_dict is None:
             request_dict = {}
@@ -356,64 +414,211 @@ class AbstractSite:
             for k, v in self.parameters.items():
                 truncated_params[k] = trunc(v, 50, ellipsis="...[truncated]")
             logger.info(
-                "Now downloading case page at: %s (params: %s)"
-                % (self.url, truncated_params)
+                "Now downloading case page at: %s (params: %s)",
+                self.url,
+                truncated_params,
             )
         else:
-            logger.info(f"Now downloading case page at: {self.url}")
+            logger.info("Now downloading case page at: %s", self.url)
 
         self._process_request_parameters(request_dict)
 
         if self.test_mode_enabled():
-            self._request_url_mock(self.url)
-        elif self.method == "GET":
-            self._request_url_get(self.url)
+            await self._request_url_mock(self.url)
+            self._post_process_response()
+            return self._return_response_text_object()
+        if self.use_urllib:
+            return self._download_urllib()
+        if self.method == "GET":
+            await self._request_url_get(self.url)
         elif self.method == "POST":
-            self._request_url_post(self.url)
+            await self._request_url_post(self.url)
 
         self._post_process_response()
         return self._return_response_text_object()
 
-    def _process_html(self):
+    def _download_content_urllib(self, download_url: str, headers: dict):
+        """Download content using urllib to bypass Cloudflare
+
+        Uses urllib instead of httpx because Cloudflare blocks httpx
+        via TLS fingerprinting. Used by scrapers with `use_urllib = True`.
+
+        :param download_url: The URL for the item you wish to download.
+        :param headers: headers dict
+        :return: A response object with a `content` field
+        """
+        req = urllib.request.Request(download_url, headers=headers)
+        response = self.urllib_opener.open(req, timeout=90)
+        response.content = response.read()
+
+        return response
+
+    async def download_content(
+        self,
+        download_url: str,
+        doctor_is_available: bool = True,
+        media_root: str = "",
+    ) -> str | bytes:
+        """Download the URL and return the cleaned content
+
+        Downloads the file, covering a few special cases such as invalid SSL
+        certificates and empty file errors.
+
+        :param download_url: The URL for the item you wish to download.
+        :param doctor_is_available: If True, it will try to follow meta
+            redirections
+        :param media_root: The root directory for local files in Courtlistener,
+            used in test mode
+
+        :return: The downloaded and cleaned content
+        :raises: NoDownloadUrlError, UnexpectedContentTypeError, EmptyFileError
+        """
+        check_download_url(download_url)
+
+        # noinspection PyBroadException
+        if self.test_mode_enabled():
+            # this is useful for CL integration tests
+            def handler(request: httpx.Request):
+                r = httpx.Response(status_code=404, request=request)
+                try:
+                    url = pathlib.Path(media_root) / download_url
+                    with url.open(mode="rb") as stream:
+                        r = httpx.Response(
+                            status_code=200,
+                            request=request,
+                            content=stream.read(),
+                        )
+                        if url.name.endswith("json"):
+                            r.headers["content-type"] = "application/json"
+                except OSError as e:
+                    raise httpx.ConnectError(message=str(e), request=request)
+                return r
+
+            transport = httpx.MockTransport(handler)
+            s = httpx.AsyncClient(transport=transport)
+            r = await s.get(url=self.url)
+            return self.cleanup_content(r.content)
+
+        if self.needs_special_headers:
+            headers = self.request["headers"]
+        else:
+            headers = {"User-Agent": "CourtListener"}
+
+        if self.use_urllib:
+            r = self._download_content_urllib(download_url, headers)
+        else:
+            s = self.request["session"]
+            # Note that we do a GET even if self.method is POST. This is
+            # deliberate.
+            r = await s.get(
+                download_url,
+                headers=headers,
+                cookies=self.cookies,
+                timeout=300,
+            )
+
+        check_empty_downloaded_file(r, download_url)
+        check_expected_content_types(self, r, download_url)
+
+        if doctor_is_available and not self.use_urllib:
+            # test for and follow meta redirects, uses doctor get_extension
+            # service
+            r = await follow_redirections(r, s)
+            r.raise_for_status()
+
+        return self.cleanup_content(r.content)
+
+    def _process_html(self) -> None | Awaitable[None]:
         """Hook for processing available self.html after it's been downloaded.
         This step is completely optional, but is useful if you want to transform
         the html before running the data getters (_get_*), or if its easier to
         extract the cases form the html in a linear function (here) as opposed
         to using separate data getters.  See sc.py for example.
         """
-        pass
 
     def _process_request_parameters(self, parameters=None):
         """Hook for processing injected parameter overrides"""
         if parameters is None:
             parameters = {}
-        if parameters.get("verify") is not None:
-            self.request["verify"] = parameters["verify"]
-            del parameters["verify"]
         self.request["parameters"].update(parameters)
 
-    def _request_url_get(self, url):
+    def _download_urllib(self):
+        """Handle download using urllib backend.
+
+        :return: parsed HTML tree or JSON object
+        """
+        data = None
+        if self.method == "POST":
+            data = urllib.parse.urlencode(self.parameters).encode("utf-8")
+
+        raw = self._urllib_fetch(self.url, data=data)
+        text = raw.decode("utf-8")
+
+        content_type = ""
+        if hasattr(self.request["response"], "getheader"):
+            content_type = self.request["response"].getheader(
+                "Content-Type", ""
+            )
+        if "json" in content_type:
+            return json.loads(text)
+
+        text = self._clean_text(text)
+        return self._make_html_tree(text)
+
+    def _urllib_fetch(self, url, data=None, headers=None):
+        """Fetch a URL using urllib to bypass Cloudflare TLS fingerprinting.
+
+        httpx gets blocked by Cloudflare due to its TLS fingerprint
+        (httpcore). Python's stdlib urllib uses a different TLS stack
+        that Cloudflare does not block.
+
+        :param url: URL to fetch
+        :param data: POST data as bytes, or None for GET
+        :param headers: optional dict of headers to use instead of defaults
+        :return: raw response bytes
+        """
+        if headers is None:
+            headers = dict(self.request["headers"])
+        req = urllib.request.Request(url, data=data, headers=headers)
+        response = self.urllib_opener.open(req, timeout=60)
+        raw = response.read()
+        # Gzip decompression - currently only needed for lactapp_3
+        # whose server returns gzip-encoded responses
+        if raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+
+        # Populate request dict for save_response compatibility.
+        # Currently only needed for lactapp_3 which uses urllib
+        self.request["url"] = url
+        self.request["response"] = response
+        if self.save_response:
+            response.text = raw.decode("utf-8")
+            response.content = raw
+            response.history = []
+            self.save_response(self)
+
+        return raw
+
+    async def _request_url_get(self, url):
         """Execute GET request and assign appropriate request dictionary
         values
         """
         self.request["url"] = url
-        self.request["response"] = self.request["session"].get(
+        self.request["response"] = await self.request["session"].get(
             url,
             headers=self.request["headers"],
-            verify=self.request["verify"],
             timeout=60,
             **self.request["parameters"],
         )
         if self.save_response:
             self.save_response(self)
 
-    def _request_url_post(self, url):
+    async def _request_url_post(self, url):
         """Execute POST request and assign appropriate request dictionary values"""
         self.request["url"] = url
-        self.request["response"] = self.request["session"].post(
+        self.request["response"] = await self.request["session"].post(
             url,
             headers=self.request["headers"],
-            verify=self.request["verify"],
             data=self.parameters,
             timeout=60,
             **self.request["parameters"],
@@ -421,54 +626,82 @@ class AbstractSite:
         if self.save_response:
             self.save_response(self)
 
-    def _request_url_mock(self, url):
+    async def _request_url_mock(self, url):
         """Execute mock request, used for testing"""
         self.request["url"] = url
-        self.request["response"] = MockRequest(url=self.url).get()
+
+        def handler(request: httpx.Request):
+            assert self.mock_url is not None
+            try:
+                with pathlib.Path(self.mock_url).open(mode="rb") as stream:
+                    content = stream.read()
+                    try:
+                        text = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        text = str(from_bytes(content).best())
+                    r = httpx.Response(
+                        status_code=200,
+                        request=request,
+                        text=text,
+                    )
+                    if self.mock_url.endswith("json"):
+                        r.headers["content-type"] = "application/json"
+            except OSError as e:
+                raise httpx.RequestError(message=str(e), request=request)
+            return r
+
+        transport = httpx.MockTransport(handler)
+        mock_client = httpx.AsyncClient(transport=transport)
+        self.request["response"] = await mock_client.get(url=self.url)
+        return self.request["response"]
 
     def _post_process_response(self):
         """Cleanup to response object"""
         self.tweak_response_object()
+        if self.request["response"] is None:
+            raise MissingRequestResponseException
+        if not isinstance(self.request["response"], httpx.Response):
+            raise UnexpectedRequestResponseException
         self.request["response"].raise_for_status()
         set_response_encoding(self.request["response"])
 
     def _return_response_text_object(self):
         if self.request["response"]:
+            if not isinstance(self.request["response"], httpx.Response):
+                raise UnexpectedRequestResponseException
             if "json" in self.request["response"].headers.get(
                 "content-type", ""
             ):
                 return self.request["response"].json()
-            else:
-                try:
-                    payload = self.request["response"].content.decode("utf8")
-                except Exception:
-                    payload = self.request["response"].text
+            try:
+                payload = self.request["response"].content.decode("utf8")
+            except Exception:
+                payload = self.request["response"].text
 
-                text = self._clean_text(payload)
-                html_tree = self._make_html_tree(text)
-                if hasattr(html_tree, "rewrite_links"):
-                    html_tree.rewrite_links(
-                        fix_links_in_lxml_tree, base_href=self.request["url"]
-                    )
-                return html_tree
+            text = self._clean_text(payload)
+            html_tree = self._make_html_tree(text)
+            if hasattr(html_tree, "rewrite_links"):
+                html_tree.rewrite_links(
+                    fix_links_in_lxml_tree, base_href=self.request["url"]
+                )
+            return html_tree
+        return None
 
-    def _get_html_tree_by_url(self, url, parameters=None):
+    async def _get_html_tree_by_url(self, url, parameters=None):
         if parameters is None:
             parameters = {}
         self._process_request_parameters(parameters)
-        self._request_url_get(url)
+        await self._request_url_get(url)
         self._post_process_response()
         tree = self._return_response_text_object()
         tree.make_links_absolute(url)
         return tree
 
-    def _download_backwards(self, d):
+    async def _download_backwards(self, d):
         # methods for downloading the entire Site
         pass
 
-    def make_backscrape_iterable(
-        self, kwargs: dict
-    ) -> list[tuple[date, date]]:
+    def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Creates back_scrape_iterable in the most common variation,
         a list of tuples containing (start, end) date pairs, each of
         `days_interval` size
@@ -551,10 +784,10 @@ class AbstractSite:
 
     def _get_case_name_shorts(self):
         """Generates short case names for all the case names that we scrape."""
-        case_name_shorts = []
-        for case_name in self.case_names:
-            case_name_shorts.append(self.cnt.make_case_name_short(case_name))
-        return case_name_shorts
+        return [
+            self.cnt.make_case_name_short(case_name)
+            for case_name in self.case_names
+        ]
 
     def _get_blocked_statuses(self):
         """Should these items be blocked by search engines? Default is False for

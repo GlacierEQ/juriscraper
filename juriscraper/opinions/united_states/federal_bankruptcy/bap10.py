@@ -8,11 +8,13 @@ History:
     2014-09-01: First draft by Jon Andersen
     2014-09-02: Revised by mlr to use _clean_text() instead of pushing logic
                 into the _get_case_dates function.
+    2025-08-28, lmanzur: Retrieve lower_court.
 """
 
 from datetime import date, datetime, timedelta
-from typing import Optional
 from urllib.parse import urlencode
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
@@ -29,6 +31,7 @@ class Site(OpinionSiteLinear):
         self.set_url()
         self.make_backscrape_iterable(kwargs)
 
+    @override
     def _process_html(self) -> None:
         for row in self.html.xpath(".//tr"):
             if not row.xpath(".//td"):
@@ -38,13 +41,16 @@ class Site(OpinionSiteLinear):
                     "docket": row.xpath(".//td")[0].text_content().strip(),
                     "name": row.xpath(".//td")[1].text_content().strip(),
                     "date": row.xpath(".//td")[2].text_content().strip(),
+                    "lower_court": row.xpath(".//td")[3]
+                    .text_content()
+                    .strip(),
                     "url": row.xpath(".//a/@href")[0],
                     "status": "Published",
                 }
             )
 
     def set_url(
-        self, start: Optional[date] = None, end: Optional[date] = None
+        self, start: date | None = None, end: date | None = None
     ) -> None:
         """Sets URL with date filters in query string
 
@@ -66,7 +72,7 @@ class Site(OpinionSiteLinear):
         }
         self.url = f"{self.base_url}?{urlencode(params)}"
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -74,5 +80,5 @@ class Site(OpinionSiteLinear):
         """
         logger.info("Backscraping for range %s %s", *dates)
         self.set_url(*dates)
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()

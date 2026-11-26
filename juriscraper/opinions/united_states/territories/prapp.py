@@ -10,6 +10,7 @@ from datetime import date, datetime
 
 from dateparser import parse
 from dateutil.relativedelta import relativedelta
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import titlecase
@@ -23,6 +24,7 @@ class Site(OpinionSiteLinear):
     is_backscrape = False
 
     def __init__(self, *args, **kwargs):
+        kwargs.setdefault("verify", False)
         super().__init__(*args, **kwargs)
         self.court_id = self.__module__
         self.year = date.today().year
@@ -32,7 +34,7 @@ class Site(OpinionSiteLinear):
         self.status = "Published"
         self.make_backscrape_iterable(kwargs)
 
-    def _download(self):
+    async def _download(self):
         """Download case pages
 
         If a backscrape ignore the need to find the correct page
@@ -41,9 +43,9 @@ class Site(OpinionSiteLinear):
         :return: HTML object
         """
         if self.test_mode_enabled():
-            return super()._download()
+            return await super()._download()
         if not self.html:
-            self.html = super()._download()
+            self.html = await super()._download()
 
         if not self.is_backscrape:
             latest_url = self.html.xpath(
@@ -52,7 +54,7 @@ class Site(OpinionSiteLinear):
             if not latest_url:
                 logger.debug(f"No opinions posted for {self.year}")
                 self.html = None
-                return
+                return None
 
             self.url = latest_url[0]
         if self.current_month not in self.url:
@@ -60,9 +62,10 @@ class Site(OpinionSiteLinear):
                 f"No opinions yet posted for current month {self.current_month}, moving to most recent month."
             )
 
-        return super()._download()
+        return await super()._download()
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         """Process the html
 
         Long delays between posting necessitate a few extra warnings around
@@ -89,7 +92,8 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def make_backscrape_iterable(self, kwargs):
+    @override
+    def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Generate backscrape iterable
 
         Generate spanish language year month slug to be used in scraping
@@ -111,7 +115,7 @@ class Site(OpinionSiteLinear):
 
         self.back_scrape_iterable = months
 
-    def _download_backwards(self, year_month: str):
+    async def _download_backwards(self, year_month: str):
         """Download backwards
 
         :param year_month: spanish year month used to generate url
@@ -120,7 +124,7 @@ class Site(OpinionSiteLinear):
         self.is_backscrape = True
         logger.info("Backscraping for %s", year_month)
         self.url = f"{self.base_url}/decisiones-del-tribunal-de-apelaciones-{year_month}/"
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
     def format_spanish_month_year(self, datetime_obj: datetime) -> str:

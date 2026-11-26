@@ -1,17 +1,19 @@
 import argparse
-import os
+import asyncio
+import pathlib
 import pprint
 import re
 import sys
 from html import unescape
-from typing import Union
 
 import feedparser
-from requests import Session
+from httpx import AsyncClient, Timeout
+from typing_extensions import override
 
 from juriscraper.lib.log_tools import make_default_logger
 from juriscraper.lib.string_utils import clean_string, harmonize
 from juriscraper.lib.utils import clean_court_object
+from juriscraper.pacer.docket_report import DocketNumberComponents
 
 from .docket_report import DocketReport
 from .utils import (
@@ -90,7 +92,7 @@ def append_or_merge_entry(docket_list, new_docket):
     docket entries
     :param new_docket: A new docket-like dictionary that can be appended or
     merged into the docket_list.
-    :return None
+    :return: None
     """
     for docket in docket_list:
         entry = docket["docket_entries"][0]
@@ -133,11 +135,13 @@ class PacerRssFeed(DocketReport):
 
     CACHE_ATTRS = ["data"]
 
-    def __init__(self, court_id):
+    def __init__(self, court_id: str, **kwargs):
         super().__init__(court_id)
         self._clear_caches()
         self._data = None
-        self.session = Session()
+        kwargs.setdefault("http2", True)
+        kwargs.setdefault("follow_redirects", True)
+        self.session = AsyncClient(**kwargs)
         self.is_valid = True
         self.is_appellate = False
         if self.court_id[-1].isdigit() or self.court_id in [
@@ -151,9 +155,14 @@ class PacerRssFeed(DocketReport):
         else:
             self.is_bankruptcy = False
 
-    def __del__(self):
-        if self.session:
-            self.session.close()
+    async def __aenter__(self):
+        assert self.session is not None
+        await self.session.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        assert self.session is not None
+        await self.session.__aexit__(exc_type, exc_value, traceback)
 
     @property
     def url(self):
@@ -164,21 +173,20 @@ class PacerRssFeed(DocketReport):
             # But that had stopped happening by 2020.
             # Special case it for now, but EDNY/AOUSC follow is required:
             return "https://ecf.nyed.uscourts.gov/cgi-bin/readyDockets.pl"
-        elif self.court_id == "ared":
+        if self.court_id == "ared":
             # In response to requests from their bar association, the Eastern
             # District of Arkansas has a bunch of RSS feeds that you can see
             # from their homepage. Their default one is limited to orders and
             # opinions, but this one has "All Docket Entries".
             return "https://ecf.ared.uscourts.gov/cgi-bin/rss_outside4.pl"
-        elif self.is_appellate:
+        if self.is_appellate:
             return f"https://ecf.{self.court_id}.uscourts.gov/n/beam/servlet/TransportRoom?servlet=RSSGenerator"
-        else:
-            return f"https://ecf.{self.court_id}.uscourts.gov/{self.PATH}"
+        return f"https://ecf.{self.court_id}.uscourts.gov/{self.PATH}"
 
-    def query(self):
+    async def query(self):
         """Query the RSS feed for a given court ID
 
-        Note that we use requests here, and so we forgo some of the
+        Note that we use httpx here, and so we forgo some of the
         useful features that feedparser offers around the Etags and
         Last-Modified headers. This is fine for now because no PACER
         site seems to support these headers, but eventually we'll
@@ -191,24 +199,26 @@ class PacerRssFeed(DocketReport):
         For a good summary of this issue, see:
         https://github.com/freelawproject/juriscraper/issues/195#issuecomment-385848344
         """
-        logger.info(f"Querying the RSS feed for {self.court_id}")
+        assert self.session is not None
+        logger.info("Querying the RSS feed for %s", self.court_id)
         # The timeout here is a bit tricky. Too long, and national PACER
         # outages cause us grief. Too short and slow courts don't get done.
         # Previously, this value has been (60, 300), then 5. Hopefully the
         # below is a reasonable middle ground.
-        timeout = (5, 20)
-        self.response = self.session.get(self.url, timeout=timeout)
+        timeout = Timeout(5, read=20)
+        self.response = await self.session.get(self.url, timeout=timeout)
 
     def parse(self):
         self._clear_caches()
         self.response.raise_for_status()
         self._parse_text(self.response.text)
 
-    def _parse_text(self, text):
+    @override
+    def _parse_text(self, text: str) -> None:
         """Parse the feed and set self.feed
 
         :param text: The text of the RSS feed.
-        :return None
+        :return: None
         """
         self.feed = feedparser.parse(text)
 
@@ -247,7 +257,7 @@ class PacerRssFeed(DocketReport):
         docket_number, docket_number_components = self._parse_docket_number(
             entry.title
         )
-        data = {
+        data: dict = {
             "court_id": self.court_id,
             "pacer_case_id": (
                 get_pacer_case_id_from_nonce_url(entry.link)
@@ -277,8 +287,7 @@ class PacerRssFeed(DocketReport):
         data.update(self._parse_get_trustee_type_office_chapter(entry.summary))
         # Include the docket_number components.
         data.update(docket_number_components)
-        data = clean_court_object(data)
-        return data
+        return clean_court_object(data)
 
     @property
     def parties(self):
@@ -342,8 +351,8 @@ class PacerRssFeed(DocketReport):
         }
 
     def _parse_docket_number(
-        self, title_text
-    ) -> tuple[Union[str, None], dict[str, Union[str, None]]]:
+        self, title_text: str | None = None
+    ) -> tuple[str | None, DocketNumberComponents]:
         """Parse docket numbers from a list of potential ones. Also parse
         the docket number components.
 
@@ -380,15 +389,13 @@ class PacerRssFeed(DocketReport):
         except IndexError:
             return "Unknown Case Title"
         case_name = unescape(case_name)
-        case_name = clean_string(harmonize(case_name))
-        return case_name
+        return clean_string(harmonize(case_name))
 
 
-def _main():
+async def _main():
     # For help: python -m juriscraper.pacer.rss_feeds -h
     parser = argparse.ArgumentParser(
-        prog="python -m %s.%s"
-        % (__package__, os.path.splitext(os.path.basename(sys.argv[0]))[0])
+        prog="python -m %s.%s" % (__package__, pathlib.Path(sys.argv[0]).stem)
     )
     parser.add_argument(
         "-b",
@@ -413,7 +420,8 @@ sorry if that was your filename.""",
     if 3 <= arg_len <= 4:
         feed = PacerRssFeed(args.court_or_file)
         print(f"Querying RSS feed at: {feed.url}")
-        feed.query()
+        async with feed:
+            await feed.query()
         print(f"Parsing RSS feed for {feed.court_id}")
         feed.parse()
     else:
@@ -430,7 +438,7 @@ sorry if that was your filename.""",
                 "Reading RSS feed from %s as %s"
                 % (args.court_or_file, feed.court_id)
             )
-            f = open(args.court_or_file)  # noqa: SIM115
+            f = pathlib.Path(args.court_or_file).open()  # noqa: SIM115
         feed._parse_text(f.read().decode("utf-8"))
 
     print(f"Got {len(feed.data)} items")
@@ -440,4 +448,4 @@ sorry if that was your filename.""",
 
 
 if __name__ == "__main__":
-    _main()
+    asyncio.run(_main())

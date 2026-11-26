@@ -9,16 +9,23 @@ History:
  - 2015-07-31: Redone by mlr to use ghost driver. Alas, their site used to be
                great, but now it's terribly frustrating.
  - 2021-12-28: Remove selenium by flooie
+ - 2026-07-11: Make __EVENTVALIDATION optional; site stopped emitting it
 """
 
 from datetime import date
+from typing import Any
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
-from juriscraper.lib.utils import backscrape_over_paginated_results
+from juriscraper.lib.utils import (
+    PaginatedHtmlBackscrapeSite,
+    backscrape_over_paginated_results,
+)
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
-class Site(OpinionSiteLinear):
+class Site(OpinionSiteLinear, PaginatedHtmlBackscrapeSite[Any]):
     days_interval = 50 * 365  # get the formatted input dates
     first_opinion_date = date(1992, 1, 1)
 
@@ -35,8 +42,10 @@ class Site(OpinionSiteLinear):
         self.url = f"https://www.supremecourt.ohio.gov/rod/docs/?HideTopicsAndIssuesColumn=False&Sort=&PageSize=50&Source={self.court_index}"
         self.make_backscrape_iterable(kwargs)
         self.is_first_request = True
+        self.should_have_results = True
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Process the HTML and extract the data
 
         :return: None
@@ -45,7 +54,7 @@ class Site(OpinionSiteLinear):
         # do the actual query
         if not self.test_mode_enabled() and self.is_first_request:
             self.set_parameters()
-            self.html = self._download()
+            self.html = await self._download()
             self.is_first_request = False
 
         for row in self.html.xpath(
@@ -103,7 +112,6 @@ class Site(OpinionSiteLinear):
 
         :return: None
         """
-        event_validation = self.html.xpath("//input[@id='__EVENTVALIDATION']")
         view_state = self.html.xpath("//input[@id='__VIEWSTATE']")
         self.parameters = {
             "__VIEWSTATEENCRYPTED": "",
@@ -112,9 +120,16 @@ class Site(OpinionSiteLinear):
             "ctl00$MainContent$ddlDecidedYearMax": f"{self.year}",
             "ctl00$MainContent$ddlCounty": "0",
             "ctl00$MainContent$ddlRowsPerPage": self.rows_per_page,
-            "__EVENTVALIDATION": event_validation[0].get("value"),
             "__VIEWSTATE": view_state[0].get("value"),
         }
+
+        # The site stopped emitting __EVENTVALIDATION around 2026-06-29;
+        # send it only when present so both variants work
+        event_validation = self.html.xpath("//input[@id='__EVENTVALIDATION']")
+        if event_validation:
+            self.parameters["__EVENTVALIDATION"] = event_validation[0].get(
+                "value"
+            )
 
         if page_number:
             self.parameters.update(
@@ -128,7 +143,7 @@ class Site(OpinionSiteLinear):
 
         self.method = "POST"
 
-    def _download_backwards(self, d: tuple[date]) -> None:
+    async def _download_backwards(self, d: tuple[date, date]) -> None:
         """Filter site to get older records
 
         There is max of 1000 results returned per search; so it's better
@@ -147,7 +162,7 @@ class Site(OpinionSiteLinear):
         self.is_first_request = True
         self.method = "GET"
 
-        cases = backscrape_over_paginated_results(
+        cases = await backscrape_over_paginated_results(
             1,
             100,
             start_date,
@@ -158,8 +173,9 @@ class Site(OpinionSiteLinear):
         )
         self.cases = cases
 
+    # TODO[Python3.11]: Use `Self`
     @staticmethod
-    def set_parameters_by_page(page: int, site) -> None:
+    def set_parameters_by_page(page: int, site: "Site") -> None:
         """Function to set the page number inside
         `backscrape_over_paginated_results`
 
@@ -172,6 +188,7 @@ class Site(OpinionSiteLinear):
             return
         site.set_parameters(str(page))
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         super().make_backscrape_iterable(kwargs)
         start_date = self.back_scrape_iterable[0][0]

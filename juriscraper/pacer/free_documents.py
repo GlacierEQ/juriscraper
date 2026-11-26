@@ -2,8 +2,13 @@
 which is free.
 """
 
+import pathlib
 import pprint
 import sys
+from datetime import date
+from typing import Literal, assert_never
+
+from typing_extensions import override
 
 from juriscraper.lib.date_utils import make_date_range_tuples
 from juriscraper.lib.html_utils import (
@@ -34,10 +39,10 @@ logger = make_default_logger()
 class FreeOpinionReport(BaseReport):
     """An object for querying and parsing the free opinion report."""
 
-    EXCLUDED_COURT_IDS = ["casb", "innb", "miwb", "ohsb"]
+    EXCLUDED_COURT_IDS = ["casb", "innb", "ohsb"]
     VALID_SORT_PARAMS = ("date_filed", "case_number")
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         self.responses = []
         self.responses_with_params = []
         self.trees = []
@@ -47,12 +52,15 @@ class FreeOpinionReport(BaseReport):
     def url(self):
         if self.court_id == "ohnd":
             return "https://ecf.ohnd.uscourts.gov/cgi-bin/OHND_WrtOpRpt.pl"
-        else:
-            return (
-                f"https://ecf.{self.court_id}.uscourts.gov/cgi-bin/WrtOpRpt.pl"
-            )
+        return f"https://ecf.{self.court_id}.uscourts.gov/cgi-bin/WrtOpRpt.pl"
 
-    def query(self, start, end, sort="date_filed", day_span=7):
+    async def query(
+        self,
+        start: date,
+        end: date,
+        sort: Literal["date_filed", "case_number"] = "date_filed",
+        day_span: int = 7,
+    ):
         """Query the Free Opinions report one day at a time.
 
         :param start: a date object representing the date you want to start at.
@@ -87,7 +95,7 @@ class FreeOpinionReport(BaseReport):
             )
 
             # Get the first page, grab the nonce, and submit using that.
-            response = self.session.get(self.url)
+            response = await self.session.get(self.url)
             nonce = get_nonce_from_form(response)
             logger.info("Got nonce of %s", nonce)
 
@@ -98,7 +106,9 @@ class FreeOpinionReport(BaseReport):
                 "Key1": self._normalize_sort_param(sort),
                 "all_case_ids": "0",
             }
-            response = self.session.post(f"{self.url}?{nonce}", data=data)
+            response = await self.session.post(
+                f"{self.url}?{nonce}", data=data
+            )
             responses.append(response)
             responses_with_params.append(
                 {
@@ -125,10 +135,13 @@ class FreeOpinionReport(BaseReport):
             set_response_encoding(response)
             text = clean_html(response.text)
             tree = get_html_parsed_text(text)
-            tree.rewrite_links(fix_links_in_lxml_tree, base_href=response.url)
+            tree.rewrite_links(
+                fix_links_in_lxml_tree, base_href=str(response.url)
+            )
             self.trees.append(tree)
 
-    def _parse_text(self, text):
+    @override
+    def _parse_text(self, text: str) -> None:
         """Parse the HTML as unicode text and set self.tree
 
         This is a particularly critical method when running tests, which pull
@@ -148,16 +161,36 @@ class FreeOpinionReport(BaseReport):
         self.tree.rewrite_links(fix_links_in_lxml_tree, base_href=self.url)
         self.trees.append(self.tree)
 
+    @staticmethod
+    def _get_reported_opinion_count(tree):
+        """PACER's "Total number of opinions reported" value for one page.
+
+        :param tree: a parsed lxml tree for a single result page.
+        :return: the reported opinion count as an int.
+        """
+        return int(
+            tree.xpath(
+                '//b[contains(text(), "Total number of opinions reported")]'
+            )[0].tail
+        )
+
+    @property
+    def reported_opinion_count(self) -> int:
+        """Total opinions PACER reported across all queried pages for this scrape.
+
+        This is PACER's own count, independent of how many rows we successfully
+        parsed. Comparing it against ``len(self.data)`` surfaces silent parse
+        gaps.
+        """
+        return sum(
+            self._get_reported_opinion_count(tree) for tree in self.trees
+        )
+
     @property
     def data(self):
         results = []
         for tree in self.trees:
-            opinion_count = int(
-                tree.xpath(
-                    '//b[contains(text(), "Total number of '
-                    'opinions reported")]'
-                )[0].tail
-            )
+            opinion_count = self._get_reported_opinion_count(tree)
             if opinion_count == 0:
                 continue
             rows = tree.xpath("(//table)[1]//tr[position() > 1]")
@@ -176,16 +209,20 @@ class FreeOpinionReport(BaseReport):
         )
         return results
 
-    def _normalize_sort_param(self, sort):
-        if sort == "date_filed":
-            return "de_date_filed"
-        elif sort == "case_number":
-            return "cs_sort_case_numb"
-        else:
-            raise ValueError(
-                "Invalid sort parameter. Value must be one of: %s"
-                % ", ".join(self.VALID_SORT_PARAMS)
-            )
+    def _normalize_sort_param(
+        self, sort: Literal["date_filed", "case_number"]
+    ) -> str:
+        match sort:
+            case "date_filed":
+                return "de_date_filed"
+            case "case_number":
+                return "cs_sort_case_numb"
+            case _:
+                assert_never(sort)
+                raise ValueError(
+                    "Invalid sort parameter. Value must be one of: %s"
+                    % ", ".join(self.VALID_SORT_PARAMS)
+                )
 
 
 class FreeOpinionRow(BaseDocketReport):
@@ -263,8 +300,7 @@ class FreeOpinionRow(BaseDocketReport):
     @property
     def data(self):
         """Get all the data back from this endpoint."""
-        data = self.metadata.copy()
-        return data
+        return self.metadata.copy()
 
     def _get_column_count(self):
         return len(self.element.xpath("./td"))
@@ -287,8 +323,7 @@ class FreeOpinionRow(BaseDocketReport):
         """
         if len(self.element.xpath("./td[2]//@href")) > 0:
             return "date_filed"
-        else:
-            return "case_number"
+        return "case_number"
 
     def get_pacer_case_id_and_pacer_seq_no(self):
         """Get the pacer_case_id and pacer_seq_no values for a document.
@@ -328,7 +363,7 @@ class FreeOpinionRow(BaseDocketReport):
             href = self.element.xpath("./td[2]//@href")[0]
         return get_pacer_case_id_from_nonce_url(href), None
 
-    def get_docket_number(self):
+    def get_docket_number(self) -> str:
         try:
             if self._sort_order == "case_number":
                 cell = self.element.xpath("./td[1]//a")[0]
@@ -346,8 +381,7 @@ class FreeOpinionRow(BaseDocketReport):
             # Split on the first space, left is docket number, right
             # is case name.
             return s.split(" ", 1)[0]
-        else:
-            return s
+        return s
 
     def get_case_name(self):
         if self._sort_order == "case_number":
@@ -387,20 +421,19 @@ class FreeOpinionRow(BaseDocketReport):
         if not s.strip() and self._sort_order == "date_filed":
             # Empty cell, return the previous value.
             return self.last_good_row["date_filed"]
-        else:
-            return convert_date_string(s)
+        return convert_date_string(s)
 
     def get_pacer_doc_id(self):
         doc1_url = self.element.xpath("./td[3]//@href")[0]
         return get_pacer_doc_id_from_doc1_url(doc1_url)
 
-    def get_document_number(self):
+    def get_document_number(self) -> str:
         return self.element.xpath("./td[3]//text()")[0]
 
-    def get_description(self):
+    def get_description(self) -> str:
         return self.element.xpath("./td[4]")[0].text_content()
 
-    def get_nos(self):
+    def get_nos(self) -> str:
         if self._column_count == 4:
             return ""
         try:
@@ -410,7 +443,7 @@ class FreeOpinionRow(BaseDocketReport):
         except IndexError:
             return ""
 
-    def get_cause(self):
+    def get_cause(self) -> str:
         if self._column_count == 4:
             return ""
         try:
@@ -431,7 +464,7 @@ def _main():
     )  # Court ID is only needed for querying.
     filepath = sys.argv[1]
     print(f"Parsing HTML file at {filepath}")
-    with open(filepath) as f:
+    with pathlib.Path(filepath).open() as f:
         text = f.read()
     report._parse_text(text)
     pprint.pprint(report.data, indent=2)

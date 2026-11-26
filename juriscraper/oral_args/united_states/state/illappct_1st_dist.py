@@ -11,6 +11,7 @@ History:
 from datetime import timedelta
 
 from dateutil.utils import today
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.OralArgumentSiteLinear import OralArgumentSiteLinear
@@ -43,15 +44,26 @@ class Site(OralArgumentSiteLinear):
             "ctl00$ctl04$hdnSortDirection": "DESC",
         }
 
-    def _process_html(self):
-        for row in self.html.xpath('.//table[@id="ctl04_gvArguments"]/tr')[2:]:
+    @override
+    def _process_html(self) -> None:
+        for row in self.html.xpath(
+            './/table[@id="ctl04_gvArguments"]/tr[not(th)]'
+        ):
             url = row.xpath(".//a/@data-audio")
             if not url:
                 logger.warning("Skipping row with no audio file to download")
                 continue
 
             url = url[0].replace(" ", "%20")
-            date, district, docket, name, *others = row.xpath(".//span/text()")
+            span_elements = row.xpath(".//span")
+            spans = [span.text_content().strip() for span in span_elements]
+            if len(spans) < 4:
+                logger.warning(
+                    "Skipping row with insufficient data: expected at least 4 values, got %s",
+                    "-".join(spans),
+                )
+                continue
+            date, _, docket, name, *others = spans
             if others:
                 docket, name = name, others[0]
             self.cases.append(
@@ -59,7 +71,6 @@ class Site(OralArgumentSiteLinear):
                     "date": date,
                     "docket": docket,
                     "name": name,
-                    "district": district,
                     "url": url,
                 }
             )

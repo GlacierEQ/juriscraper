@@ -1,20 +1,32 @@
 # Author: Phil Ardery
 # Contact: https://www.ndcourts.gov/contact-us
+# History:
 # Date created: 2019-02-28
 # Updated: 2024-05-08, grossir: to OpinionSiteLinear and new URL
+# Updated: 2025-07-02, luism: get citation from HTML
+# Updated: 2025-09-01, luism: extract lower court information from text
+
 import re
 from datetime import date, datetime
+from typing import Any
 from urllib.parse import urljoin
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import normalize_dashes
-from juriscraper.lib.utils import backscrape_over_paginated_results
+from juriscraper.lib.utils import (
+    PaginatedHtmlBackscrapeSite,
+    backscrape_over_paginated_results,
+)
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
-class Site(OpinionSiteLinear):
+class Site(OpinionSiteLinear, PaginatedHtmlBackscrapeSite[Any]):
     base_url = "https://www.ndcourts.gov/"
     ordered_fields = [
+        "citation",
         "name",
         "docket",
         "date",
@@ -24,6 +36,7 @@ class Site(OpinionSiteLinear):
     first_opinion_date = datetime(1955, 10, 25)
     # Ensure the backscrape iterable has a single item
     days_interval = (datetime.today() - first_opinion_date).days + 2
+    name_regex = re.compile(r"^(.*?)(\s*(\d{4}\sND\s\d+))\s*$")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -31,8 +44,10 @@ class Site(OpinionSiteLinear):
         self.url = "https://www.ndcourts.gov/supreme-court/opinions?topic=&author=&searchQuery=&trialJudge=&pageSize=100&sortOrder=1"
         self.status = "Published"
         self.make_backscrape_iterable(kwargs)
+        self.should_have_results = True
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Most values are inside a <p>: whitespace and
         field names need to be cleaned
 
@@ -45,41 +60,68 @@ class Site(OpinionSiteLinear):
         seen_urls = set()
 
         for row in self.html.xpath('//table//div[@class="row"]'):
-            raw_values = list(map(str.strip, row.xpath("./div/p[1]/text()")))
-            values = []
+            onclick = row.xpath(".//button[@onclick]/@onclick")
+            if not onclick:
+                logger.info("Skipping row without a 'View Opinion' button")
+                continue
 
-            for idx, txt in enumerate(raw_values[:5]):
-                if idx == 0:
-                    txt, _ = self.clean_name(txt)
-                else:
-                    txt = txt.split(":", 1)[1].strip()
-                values.append(txt)
-
-            summary = (
-                " ".join(raw_values[5:]).strip() if len(raw_values) > 5 else ""
+            raw_name, *values = list(
+                map(str.strip, row.xpath("./div[1]/p[1]/text()"))
             )
+
+            # Do the URL check
             url = urljoin(
                 self.base_url,
-                row.xpath(".//button[@onclick]/@onclick")[0].split("'")[1],
+                onclick[0].split("'")[1],
             )
             if url in seen_urls:
                 logger.info(
-                    "Skipping %s %s, we already have a case with url %s",
-                    raw_values[0],
-                    raw_values[1],
+                    "Skipping %s, we already have a case with url %s",
+                    raw_name,
                     url,
                 )
                 continue
             seen_urls.add(url)
 
-            case = dict(zip(self.ordered_fields, values[:5]))
-            case.update({"summary": summary, "url": url, "per_curiam": False})
+            docket, date, nature, author = [
+                txt.split(":", 1)[1].strip() for txt in values if txt
+            ]
 
-            if "per curiam" in case["judge"].lower():
-                case["judge"] = ""
-                case["per_curiam"] = True
+            if match := self.name_regex.search(raw_name):
+                case_name = match.group(1).strip()
+                citation = match.group(2).strip()
+                raw_name = case_name
+            else:
+                citation = ""
 
-            self.cases.append(case)
+            case_name, other_docket = self.clean_name(raw_name)
+
+            if other_docket:
+                docket = f"{docket}, {other_docket}"
+
+            per_curiam = False
+            if "per curiam" in author.lower():
+                author = ""
+                per_curiam = True
+
+            summary = ""
+            if summary_texts := row.xpath("./div[2]/p[1]/text()"):
+                summary = " ".join(summary_texts).strip()
+
+            self.cases.append(
+                {
+                    "date": date,
+                    "per_curiam": per_curiam,
+                    "author": author,
+                    "judge": author,
+                    "summary": summary,
+                    "name": case_name,
+                    "citation": citation,
+                    "docket": docket,
+                    "nature_of_suit": nature,
+                    "url": url,
+                }
+            )
 
     def clean_name(self, name: str) -> tuple[str, str]:
         """Cleans case name
@@ -99,10 +141,12 @@ class Site(OpinionSiteLinear):
 
         return name.strip(), other_dockets
 
-    def extract_from_text(self, scraped_text: str) -> dict:
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
         """Extract model fields from opinion's document text
 
-        The citation is only available in the document's text
+        Most times, the citations are available in the HTML; sometimes, they
+        are only listed on the text
 
         For case_name and docket_number, even if they are available
         in the HTML, the document's text has the best values
@@ -113,7 +157,7 @@ class Site(OpinionSiteLinear):
         :return: Dict with keys of model's names, and values as dicts
         of models field - value pairs
         """
-        metadata = {}
+        metadata: ExtractedMetaData = {}
         regex = r"20\d{2}\sND\s\d+"
         citation_match = re.search(regex, scraped_text[:1000])
 
@@ -140,6 +184,19 @@ class Site(OpinionSiteLinear):
                 case_name = reversed_lines[index + 1].strip()
                 break
 
+        lower_court_pattern = re.compile(
+            r"Appeal\s+from\s+the\s+(?P<lower_court>.*?),\s*the\s+Honorable\s+(?P<judge>.+?),\s*Judge",
+            re.DOTALL,
+        )
+
+        lower_court = ""
+        lower_court_judge = ""
+        if match := lower_court_pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+            lower_court_judge = match.group("judge").strip()
+
         # We only put keys into the objects when they exist
         # Otherwise, we would overwrite existing data with empty values
         metadata.update({"OpinionCluster": {}, "Docket": {}})
@@ -150,10 +207,17 @@ class Site(OpinionSiteLinear):
             metadata["Docket"]["docket_number"] = normalize_dashes(
                 docket_number
             )
+        if lower_court:
+            metadata["Docket"]["appeal_from_str"] = lower_court
+        if lower_court_judge:
+            metadata.update({"OriginatingCourtInformation": {}})
+            metadata["OriginatingCourtInformation"]["assigned_to_str"] = (
+                lower_court_judge
+            )
 
         return metadata
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Make custom date range request
 
         :param dates: (start_date, end_date) tuple
@@ -165,6 +229,6 @@ class Site(OpinionSiteLinear):
         last_page = 130
         base_url = self.url
         url_template = f"{base_url}&page={{}}"
-        self.cases = backscrape_over_paginated_results(
+        self.cases = await backscrape_over_paginated_results(
             2, last_page, start, end, "%m/%d/%Y", self, None, url_template
         )

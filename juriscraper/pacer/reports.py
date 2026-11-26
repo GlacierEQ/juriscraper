@@ -1,10 +1,8 @@
 import re
-from typing import Optional
 from urllib.parse import urljoin
 
-import requests
+from httpx import Response, Timeout
 from lxml.html import HtmlElement
-from requests import Response
 
 from juriscraper.lib.html_utils import (
     clean_html,
@@ -19,6 +17,7 @@ from juriscraper.lib.log_tools import make_default_logger
 from .utils import (
     get_doc_id_prefix_from_court_id,
     is_pdf,
+    make_acms_free_doc_url,
     make_doc1_url,
     make_docs1_url,
 )
@@ -52,7 +51,7 @@ class BaseReport:
         "Drumpf",
     ]
 
-    def __init__(self, court_id, pacer_session=None):
+    def __init__(self, court_id: str, pacer_session=None):
         self.court_id = court_id
         self.session = pacer_session
         self.tree = None
@@ -67,15 +66,14 @@ class BaseReport:
     def url(self):
         if self.court_id == "psc":
             return f"https://dcecf.psc.uscourts.gov/{self.PATH}"
-        else:
-            return f"https://ecf.{self.court_id}.uscourts.gov/{self.PATH}"
+        return f"https://ecf.{self.court_id}.uscourts.gov/{self.PATH}"
 
-    def query(self, *args, **kwargs):
+    async def query(self, *args, **kwargs):
         """Query PACER and set self.response with the response."""
         raise NotImplementedError(".query() must be overridden")
 
     def parse(self):
-        """Parse the data provided in a requests.response object and set
+        """Parse the data provided in a httpx.Response object and set
         self.tree to be an lxml etree. In most cases, you won't need to call
         this since it will be automatically called by self.query, if needed.
 
@@ -85,7 +83,7 @@ class BaseReport:
         set_response_encoding(self.response)
         self._parse_text(self.response.text)
 
-    def _parse_text(self, text):
+    def _parse_text(self, text: str) -> None:
         """Parse the HTML as unicode text and set self.tree
 
         This is a particularly critical method when running tests, which pull
@@ -134,13 +132,13 @@ class BaseReport:
         """Extract the data from the tree and return it."""
         raise NotImplementedError(".data() must be overridden.")
 
-    def _query_pdf_download(
+    async def _query_pdf_download(
         self,
-        pacer_case_id: str,
+        pacer_case_id: str | None,
         pacer_doc_id: str,
-        pacer_magic_num: Optional[str],
+        pacer_magic_num: str | None,
         got_receipt: str,
-        de_seq_num: Optional[str] = None,
+        de_seq_num: str | None = None,
     ) -> tuple[Response, str]:
         """Query the doc1 download URL.
 
@@ -152,19 +150,6 @@ class BaseReport:
         """
         url = make_doc1_url(self.court_id, pacer_doc_id, True)
         data = {
-            # Sending the case ID is important if you want to get PDF headers.
-            # Without the case ID, PACER won't know what case it is, and won't
-            # be able to add the correct headers. That'd suggest that the case
-            # ID should always be sent. Unfortunately though, in many criminal
-            # cases, there are documents from other related cases, and at least
-            # in CourtListener, we do a bad job of keeping track of which doc
-            # is from which related criminal case. If you send the *wrong* case
-            # ID, you get no document at all. Though you do get a useful error
-            # message. As a result, the approach we take in self.download_pdf
-            # is to try it with the case ID, and then if we see that error
-            # message, we try it again without the case ID. We won't get the
-            # headers in that case, but we'll at least get the document.
-            "caseid": pacer_case_id,
             "got_receipt": got_receipt,
             # Include the PDF header where possible. Different courts allow
             # different things here. Some have the toggle on the Docket Report
@@ -178,6 +163,21 @@ class BaseReport:
             "pdf_toggle_possible": "1",
         }
 
+        # Sending the case ID is important if you want to get PDF headers.
+        # Without the case ID, PACER won't know what case it is, and won't
+        # be able to add the correct headers. That'd suggest that the case
+        # ID should always be sent. Unfortunately though, in many criminal
+        # cases, there are documents from other related cases, and at least
+        # in CourtListener, we do a bad job of keeping track of which doc
+        # is from which related criminal case. If you send the *wrong* case
+        # ID, you get no document at all. Though you do get a useful error
+        # message. As a result, the approach we take in self.download_pdf
+        # is to try it with the case ID, and then if we see that error
+        # message, we try it again without the case ID. We won't get the
+        # headers in that case, but we'll at least get the document.
+        if pacer_case_id is not None:
+            data["caseid"] = pacer_case_id
+
         # This is not always set, so we give it an option here.
         if pacer_magic_num is not None:
             data["magic_num"] = pacer_magic_num
@@ -185,19 +185,20 @@ class BaseReport:
         if de_seq_num:
             data["de_seq_num"] = de_seq_num
 
-        timeout = (60, 300)
-        logger.info(f"POSTing URL: {url} with params: {data}")
-        r = self.session.post(url, data=data, timeout=timeout)
+        timeout = Timeout(60, read=300)
+        logger.info("POSTing URL: %s with params: %r", url, data)
+        r = await self.session.post(url, data=data, timeout=timeout)
         return r, url
 
-    def download_pdf(
+    async def download_pdf(
         self,
         pacer_case_id: str,
-        pacer_doc_id: int,
-        pacer_magic_num: Optional[str] = None,
+        pacer_doc_id: str,
+        pacer_magic_num: str | None = None,
         appellate: bool = False,
-        de_seq_num: Optional[str] = None,
-    ) -> tuple[Optional[Response], str]:
+        de_seq_num: str | None = None,
+        acms: bool = False,
+    ) -> tuple[Response | None, str]:
         """Download a PDF from PACER.
 
         Note that this doesn't support attachments yet.
@@ -206,13 +207,25 @@ class BaseReport:
         one can be found (is not sealed, gone, etc.). And a string indicating
         the error message, if there is one or else an empty string.
         """
+
+        assert self.session is not None, (
+            "session attribute of BaseReport cannot be None."
+        )
+        assert acms or (pacer_case_id and pacer_doc_id), (
+            "pacer_case_id and pacer_doc_id can't be None for non-ACMS downloads."
+        )
+
+        req_timeout = Timeout(60, read=300)
         if pacer_magic_num:
             # If magic_number is available try to download the
             # document anonymously by its magic link
 
             # Create PACER base url from court_id and pacer_doc_id
             # Magic link parameters
-            if appellate:
+            if acms:
+                url = make_acms_free_doc_url(self.court_id, pacer_magic_num)
+                params = {}
+            elif appellate:
                 url = make_docs1_url(self.court_id, pacer_doc_id, True)
                 # For appellate documents the magic_number is the uid param
                 params = {
@@ -230,8 +243,9 @@ class BaseReport:
                 params["de_seq_num"] = de_seq_num
 
             # Add parameters to the PACER base url and make a GET request
-            req_timeout = (60, 300)
-            r = requests.get(url, params=params, timeout=req_timeout)
+            r = await self.session.get_anonymous(
+                url, params=params, timeout=req_timeout
+            )
 
             # If the response is an HTML document, and it doesn't contain an
             # IFRAME, the magic link document is no longer available
@@ -248,7 +262,7 @@ class BaseReport:
 
         else:
             # If no magic_number use normal method to fetch the document
-            r, url = self._query_pdf_download(
+            r, url = await self._query_pdf_download(
                 pacer_case_id,
                 pacer_doc_id,
                 pacer_magic_num,
@@ -262,7 +276,7 @@ class BaseReport:
                 # this docket. Probably a criminal case with the doppelganger
                 # bug. Try again, but do so without the pacer_case_id.
                 # This should work, but will omit the blue header on the PDFs.
-                r, url = self._query_pdf_download(
+                r, url = await self._query_pdf_download(
                     None, pacer_doc_id, pacer_magic_num, got_receipt="1"
                 )
 
@@ -356,7 +370,7 @@ class BaseReport:
             m = redirect_re.search(r.content)
             if m is not None:
                 redirect_url = m.group(1).decode("utf-8")
-                r = self.session.get(urljoin(url, redirect_url))
+                r = await self.session.get(urljoin(url, redirect_url))
                 r.raise_for_status()
 
         # The request above sometimes generates an HTML page with an iframe
@@ -365,12 +379,12 @@ class BaseReport:
         # the pdf.
         r.raise_for_status()
         if is_pdf(r):
-            logger.info(f"Got PDF binary data for case at {url}")
+            logger.info("Got PDF binary data for case at %s", url)
             return r, ""
 
         text = clean_html(r.text)
         tree = get_html_parsed_text(text)
-        tree.rewrite_links(fix_links_in_lxml_tree, base_href=r.url)
+        tree.rewrite_links(fix_links_in_lxml_tree, base_href=str(r.url))
         try:
             iframe_src = tree.xpath("//iframe/@src")[0]
         except IndexError:
@@ -393,37 +407,29 @@ class BaseReport:
         if pacer_magic_num:
             # If magic_number is available try to download the
             # document anonymously from iframe_src
-            r = requests.get(iframe_src, timeout=req_timeout)
+            r = await self.session.get_anonymous(
+                iframe_src, timeout=req_timeout
+            )
         else:
             # Use PACER session to fetch the document from iframe_src
-            r = self.session.get(iframe_src)
+            r = await self.session.get(iframe_src)
         if is_pdf(r):
             logger.info(
-                f"Got iframed PDF data for case {url} at: {iframe_src}"
+                "Got iframed PDF data for case %s at: %s", url, iframe_src
             )
 
         return r, ""
 
-    def is_pdf_sealed(self, pacer_case_id, pacer_doc_id, pacer_magic_num=None):
-        """Check if a PDF is sealed without trying to actually download
-        it.
-        """
-        r, url = self._query_pdf_download(
-            pacer_case_id, pacer_doc_id, pacer_magic_num, got_receipt="0"
-        )
-        sealed = "You do not have permission to view this document."
-        return sealed in r.content
-
-    def is_entry_sealed(
+    async def is_entry_sealed(
         self,
         pacer_case_id: str,
         pacer_doc_id: str,
-        pacer_magic_num: Optional[str] = None,
+        pacer_magic_num: str | None = None,
     ):
         """Check if a docket entry is sealed without trying to actually download
         it.
         """
-        r, url = self._query_pdf_download(
+        r, url = await self._query_pdf_download(
             pacer_case_id, pacer_doc_id, pacer_magic_num, got_receipt="0"
         )
         return b"could not retrieve dktentry for dlsid" in r.content

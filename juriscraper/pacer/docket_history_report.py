@@ -1,5 +1,5 @@
 import re
-from typing import Union
+from typing import Literal
 
 from juriscraper.lib.judge_parsers import normalize_judge_string
 from juriscraper.lib.log_tools import make_default_logger
@@ -10,6 +10,7 @@ from juriscraper.lib.string_utils import (
     harmonize,
 )
 from juriscraper.lib.utils import clean_court_object, previous_and_next
+from juriscraper.pacer.docket_report import DocketNumberComponents
 
 from .docket_report import DocketReport
 from .utils import (
@@ -59,7 +60,7 @@ class DocketHistoryReport(DocketReport):
 
         self._set_metadata_values()
         docket_number, docket_number_components = self._parse_docket_number()
-        data = {
+        data: dict = {
             "court_id": self.court_id,
             "docket_number": docket_number,
             "case_name": self._get_case_name(),
@@ -90,12 +91,12 @@ class DocketHistoryReport(DocketReport):
         self._metadata = data
         return data
 
-    def query(
+    async def query(
         self,
-        pacer_case_id,
-        query_type="History",
-        order_by="asc",
-        show_de_descriptions=False,
+        pacer_case_id: str,
+        query_type: Literal["History", "Documents"] = "History",
+        order_by: Literal["asc", "desc"] = "asc",
+        show_de_descriptions: bool = False,
     ):
         """Query the docket history report and return the results. Because of
         the way this works, you have to hit PACER twice. Once to get a nonce,
@@ -108,7 +109,8 @@ class DocketHistoryReport(DocketReport):
         in the report.
         :param order_by: The ordering desired for the results, either 'asc' or
         'desc'.
-        :return: request response object
+        :return None: Instead, sets self.response attribute and runs
+        self.parse()
         """
         # Set up and sanity tests
         assert self.session is not None, (
@@ -117,19 +119,16 @@ class DocketHistoryReport(DocketReport):
 
         if query_type not in ["History", "Documents"]:
             raise ValueError("Invalid value for 'query_type' parameter.")
-        if (
-            show_de_descriptions is not True
-            and show_de_descriptions is not False
-        ):
+        if not isinstance(show_de_descriptions, bool):
             raise ValueError("")
         if order_by not in ["asc", "desc"]:
             raise ValueError("Invalid value for 'order_by' parameter.")
 
         logger.info(
-            "Getting nonce for docket history report with "
-            "pacer_case_id: %s" % pacer_case_id
+            "Getting nonce for docket history report with pacer_case_id: %s",
+            pacer_case_id,
         )
-        r = self.session.get(f"{self.url}?{pacer_case_id}")
+        r = await self.session.get(f"{self.url}?{pacer_case_id}")
         nonce = get_nonce_from_form(r)
 
         query_params = {
@@ -141,10 +140,13 @@ class DocketHistoryReport(DocketReport):
 
         logger.info(
             "Querying docket history report for case ID '%s' with "
-            "params %s and nonce %s" % (pacer_case_id, query_params, nonce)
+            "params %s and nonce %s",
+            pacer_case_id,
+            query_params,
+            nonce,
         )
 
-        self.response = self.session.post(
+        self.response = await self.session.post(
             f"{self.url}?{nonce}", data=query_params
         )
         self.parse()
@@ -164,7 +166,7 @@ class DocketHistoryReport(DocketReport):
             cells = row.xpath("./td")
             if len(cells) == 3:
                 # Normal row, parse the document_number, date, etc.
-                de = {}
+                de: dict = {}
                 de["document_number"] = clean_string(cells[0].text_content())
                 if de["document_number"] == "":
                     de["document_number"] = None
@@ -215,6 +217,7 @@ class DocketHistoryReport(DocketReport):
             m = regex.search(s)
             if m:
                 return convert_date_string(m.group(1))
+        return None
 
     def _get_date_entered(self, cell):
         s = clean_string(cell.text_content())
@@ -223,6 +226,7 @@ class DocketHistoryReport(DocketReport):
             m = regex.search(s)
             if m:
                 return convert_date_string(m.group(1))
+        return None
 
     def _set_metadata_values(self):
         text_nodes = self.tree.xpath("//center[not(.//table)]//text()")
@@ -261,14 +265,12 @@ class DocketHistoryReport(DocketReport):
                         if cn_match:
                             matches.add(cn_match.group(1))
         if len(matches) == 1:
-            case_name = list(matches)[0]
-        else:
-            case_name = "Unknown Case Title"
-        return harmonize(case_name)
+            return harmonize(next(iter(matches)))
+        return harmonize("Unknown Case Title")
 
     def _parse_docket_number(
         self,
-    ) -> tuple[Union[str, None], dict[str, Union[str, None]]]:
+    ) -> tuple[str | None, DocketNumberComponents]:
         """Parse a valid docket number and its components.
 
         :param: docket_number: A string docket number to clean.
@@ -306,3 +308,4 @@ class DocketHistoryReport(DocketReport):
         else:
             # Look for string like "Michael J. Fox, presiding"
             return self._get_judge(self.assigned_to_regex)
+        return None

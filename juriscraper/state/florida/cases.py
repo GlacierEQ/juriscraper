@@ -1,0 +1,427 @@
+import itertools
+from datetime import date, datetime
+from typing import Annotated, ClassVar
+
+from pydantic import (
+    UUID4,
+    AfterValidator,
+    AliasPath,
+    BaseModel,
+    BeforeValidator,
+    Field,
+)
+from pydantic_core import PydanticCustomError
+from pydantic_core.core_schema import ValidationInfo
+from typing_extensions import override
+
+from juriscraper.abstract_parser import LegacyParser
+from juriscraper.lib.log_tools import make_default_logger
+from juriscraper.lib.string_utils import CaseNameTweaker, harmonize
+from juriscraper.state.docket import (
+    DeserializableContext,
+    Docket,
+    DocketTransfer,
+    DocketType,
+    TransferDirection,
+    TransferReason,
+)
+from juriscraper.state.florida.arguments import FloridaArgument
+from juriscraper.state.florida.common import (
+    FloridaPaginatedResults,
+    FloridaPaginatedResultsParser,
+    datetime_str_to_date_validator,
+    florida_docket_number_validator,
+)
+from juriscraper.state.florida.courts import (
+    FLORIDA_COURT_EXTERNAL_ID_MAP,
+    FloridaCourtID,
+)
+from juriscraper.state.florida.docket_entries import FloridaDocketEntry
+from juriscraper.state.florida.parties import FloridaParty
+
+logger = make_default_logger()
+
+cnt = CaseNameTweaker()
+
+# Values retrieved 2026-03-05
+FLORIDA_DOCKET_TYPE_MAP: dict[str, DocketType] = {
+    "notice of appeal": DocketType.NOTICE,
+    "notice to invoke": DocketType.NOTICE,
+    "death penalty appeal": DocketType.DEATH_APPEAL,
+    "death penalty petition": DocketType.PETITION,
+    "death penalty writ": DocketType.ORDER,
+    "petition for review": DocketType.PETITION,
+    "administrative": DocketType.ADMINISTRATIVE,
+    "circuit civil": DocketType.CIVIL,
+    "circuit criminal": DocketType.CRIMINAL,
+    "circuit family": DocketType.FAMILY,
+    "circuit guardianship": DocketType.FAMILY,
+    "circuit juvenile": DocketType.JUVENILE,
+    "circuit probate": DocketType.PROBATE,
+    "county administrative": DocketType.ADMINISTRATIVE,
+    "county civil": DocketType.CIVIL,
+    "county criminal misdemeanor": DocketType.CRIMINAL,
+    "county criminal traffic": DocketType.CRIMINAL,
+    "county family": DocketType.FAMILY,
+    "county small claims": DocketType.CIVIL,
+    "workers compensation": DocketType.UNKNOWN,
+    "advisory opinion": DocketType.UNKNOWN,
+    "county misdemeanor": DocketType.CRIMINAL,
+    "florida bar": DocketType.BAR,
+    "florida board of bar examiners": DocketType.BAR,
+    "judicial qualifications commission (jqc)": DocketType.BAR,
+    "rules": DocketType.UNKNOWN,
+    "writ": DocketType.ORDER,
+}
+
+
+def florida_docket_type_validator(
+    value: object, info: ValidationInfo[object | None]
+) -> DocketType:
+    """
+    Validates and converts a Florida case classification string to a
+    DocketType enum value.
+
+    The classification string is expected in the format
+    "Category - Type - SubType", where the type component is looked up in
+    FLORIDA_DOCKET_TYPE_MAP.
+
+    :param value: Florida case classification string.
+    :param info: Pydantic validation info.
+
+    :return: The corresponding DocketType enum value.
+    """
+    if isinstance(info.context, DeserializableContext):
+        return DocketType(value)
+
+    if not isinstance(value, str):
+        raise ValueError(f"expected string, but got {type(value).__name__}.")
+    # None of the middle components in classification strings contained dashes
+    # when this scraper was created.
+    parts = [p.strip().lower() for p in value.split(" - ", maxsplit=2)]
+    if len(parts) < 3:
+        logger.error("Invalid Florida docket type format: %s", value)
+        return DocketType.UNASSIGNED
+
+    _case_category, case_type, _case_sub_type = parts[:3]
+
+    if case_type not in FLORIDA_DOCKET_TYPE_MAP:
+        logger.error("Unrecognized Florida docket type: %s", case_type)
+        return DocketType.UNASSIGNED
+
+    return FLORIDA_DOCKET_TYPE_MAP[case_type]
+
+
+def florida_docket_type_raw_validator(
+    value: object, info: ValidationInfo[object | None]
+) -> tuple[str, str, str]:
+    """
+    Splits a Florida "caseClassification" string into a category, type, sub type
+    tuple. Missing components will be filled with empty strings.
+
+    :param value: Florida "caseClassification" string.
+    :param info: Pydantic validation info.
+
+    :return: The split tuple.
+    """
+    if isinstance(info.context, DeserializableContext):
+        if not isinstance(value, list):
+            raise ValueError(f"expected list, but got {type(value).__name__}.")
+        if not all(isinstance(e, str) for e in value):
+            types = {type(e).__name__ for e in value}
+            raise ValueError(
+                f"expected list[str], but got list[{' | '.join(types)}]."
+            )
+        if len(value) < 3:
+            logger.error("Invalid Florida docket type format: %s", value)
+
+        parts = list(
+            itertools.islice(itertools.chain(value, itertools.repeat("")), 3)
+        )
+        return parts[0], parts[1], parts[2]
+
+    if not isinstance(value, str):
+        raise ValueError(f"expected str, but got {type(value).__name__}.")
+    parts = value.split(" - ", maxsplit=2)
+    # No need to log error here because `florida_docket_type_validator` already
+    # does.
+    while len(parts) < 3:
+        parts.append("")
+    return parts[0], parts[1], parts[2]
+
+
+def florida_originating_court_id_validator(
+    value: object, info: ValidationInfo[object | None]
+) -> FloridaCourtID:
+    """
+    Validates and converts a Florida originating court name to a standardized
+    Florida court ID.
+
+    :param value: Florida originating court name.
+    :param info: Pydantic validation info.
+
+    :return: The corresponding CourtID enum value.
+    """
+    if isinstance(info.context, DeserializableContext):
+        return FloridaCourtID(value)
+
+    if not isinstance(value, str):
+        raise ValueError(f"expected str, but got {type(value).__name__}.")
+    court_name = value.lower().strip()
+    if court_name.startswith("circuit court"):
+        return FloridaCourtID.CIRCUIT
+    if court_name.startswith("county court"):
+        return FloridaCourtID.COUNTY
+    match court_name:
+        case "administrative agency":
+            return FloridaCourtID.ADMINISTRATIVE_AGENCY
+        case "state agency":
+            return FloridaCourtID.ADMINISTRATIVE_AGENCY
+        case "office of the judges of compensation claims":
+            return FloridaCourtID.COMPENSATION_CLAIMS
+        case "1st district court of appeal":
+            return FloridaCourtID.FIRST_COA
+        case "2nd district court of appeal":
+            return FloridaCourtID.SECOND_COA
+        case "3rd district court of appeal":
+            return FloridaCourtID.THIRD_COA
+        case "4th district court of appeal":
+            return FloridaCourtID.FOURTH_COA
+        case "5th district court of appeal":
+            return FloridaCourtID.FIFTH_COA
+        case "6th district court of appeal":
+            return FloridaCourtID.SIXTH_COA
+        case "supreme court of florida":
+            return FloridaCourtID.SUPREME_COURT
+        case "uscoa":
+            return FloridaCourtID.US_COA
+        case "division of administrative hearings":
+            return FloridaCourtID.DOAH
+        case "unknown court":
+            return FloridaCourtID.UNKNOWN
+        case _:
+            logger.warning("Unrecognized Florida court name: %s", court_name)
+            return FloridaCourtID.UNASSIGNED
+
+
+class FloridaOriginatingCase(BaseModel):
+    """
+    A lower court case from which a Florida appellate case originated.
+
+    :ivar court_name: The name of the originating court.
+    :ivar court_id: Juriscraper court identifier. Will be aggregated in most
+        cases due to the impracticality of creating an enum entry for every
+        circuit and county court.
+    :ivar case_number: The case number in the originating court.
+    """
+
+    court_name: str = Field(validation_alias="originatingCourtName")
+    court_id: Annotated[
+        FloridaCourtID,
+        BeforeValidator(
+            florida_originating_court_id_validator, json_schema_input_type=str
+        ),
+    ] = Field(validation_alias="originatingCourtName")
+    case_number: str = Field(
+        validation_alias="originatingCaseNumber", default=""
+    )
+
+
+def florida_external_id_to_js_id_validator(
+    value: object, info: ValidationInfo[object | None]
+) -> str:
+    """
+    Maps Florida's external court ID to a value on the FloridaCourtID enum.
+
+    :param value: Florida external court ID as a string.
+    :param info: Pydantic validation info.
+
+    :return: Value on the FloridaCourtID enum.
+    """
+    if isinstance(info.context, DeserializableContext):
+        if not isinstance(value, str):
+            raise ValueError(f"expected str, but got {type(value).__name__}.")
+        return value
+
+    if not isinstance(value, str):
+        raise ValueError(f"expected str, but got {type(value).__name__}.")
+    i = value
+    if i not in FLORIDA_COURT_EXTERNAL_ID_MAP:
+        raise PydanticCustomError(
+            "florida_court_id",
+            "Unrecognized Florida court ID: {id}",
+            {"id": i},
+        )
+    return FLORIDA_COURT_EXTERNAL_ID_MAP[i].value
+
+
+class FloridaCase(Docket[DocketTransfer, FloridaDocketEntry, FloridaParty]):
+    """
+    Extension of the Docket data structure with Florida-specific fields.
+
+    :ivar case_uuid: The UUID of this case for use in API requests.
+    :ivar docket_number: The case number assigned by the court.
+    :ivar case_name: The case title, cleaned and harmonized.
+    :ivar case_name_full: The case title derived from "caseCaption".
+    :ivar closed_flag: Whether this case is closed.
+    :ivar class_group_type: The case class group type name.
+    :ivar class_group_type_id: Florida internal integer ID of the case class
+        group type.
+    :ivar docket_type: The DocketType derived from the case classification.
+    :ivar docket_type_raw: The docket type string as it appears in the
+        "caseHeader.caseClassification" field, split into three parts (category,
+        type, subtype) on the first two occurrences of " - ".
+    :ivar classification_id: Florida internal integer ID of the case
+        classification.
+    :ivar court_id: Juriscraper court ID.
+    :ivar court_abbreviation: The Florida abbreviation for the court (e.g.
+        "1DCA").
+    :ivar location: The location name within the court.
+    :ivar location_id: Florida internal integer ID of the location.
+    :ivar date_filed: The date this case was filed.
+    :ivar datetime_filed: The date and time this case was filed according to
+        the API.
+    :ivar case_group_flag: Whether this case is part of a case group. ``None``
+        if the API did not return a value.
+    :ivar panel_flag: Whether a panel has been assigned to this case. ``None``
+        if the API did not return a value.
+    :ivar originating_cases: Lower court cases from which this case originated.
+    :ivar transfers: Transfers of this case between courts.
+    :ivar entries: Docket entries filed in this case.
+    :ivar parties: Parties in this case.
+    :ivar arguments: Oral arguments associated with this case.
+    """
+
+    case_uuid: UUID4 = Field(
+        validation_alias=AliasPath("caseHeader", "caseInstanceUUID")
+    )
+    docket_number: Annotated[
+        str, AfterValidator(florida_docket_number_validator)
+    ] = Field(validation_alias=AliasPath("caseHeader", "caseNumber"))
+    # Florida API omits empty values from results, so we have to include a default here
+    case_name: Annotated[str, AfterValidator(harmonize)] = Field(
+        validation_alias=AliasPath("caseHeader", "caseTitle"), default=""
+    )
+    case_name_full: Annotated[str, AfterValidator(harmonize)] = Field(
+        validation_alias=AliasPath("caseHeader", "caseCaption"),
+        default_factory=lambda d: d["case_name"],
+    )
+    case_name_short: Annotated[
+        str, AfterValidator(lambda s: cnt.make_case_name_short(s))
+    ] = Field(
+        validation_alias=AliasPath("caseHeader", "caseTitle"), default=""
+    )
+    closed_flag: bool = Field(
+        validation_alias=AliasPath("caseHeader", "closedFlag")
+    )
+    class_group_type: str = Field(
+        validation_alias=AliasPath("caseHeader", "caseClassGroupType"),
+        default="",
+    )
+    class_group_type_id: int = Field(
+        validation_alias=AliasPath("caseHeader", "caseClassGroupTypeID"),
+        default=0,
+    )
+    docket_type: Annotated[
+        DocketType,
+        BeforeValidator(
+            florida_docket_type_validator, json_schema_input_type=str
+        ),
+    ] = Field(validation_alias=AliasPath("caseHeader", "caseClassification"))
+    docket_type_raw: Annotated[
+        tuple[str, str, str],
+        BeforeValidator(
+            florida_docket_type_raw_validator, json_schema_input_type=str
+        ),
+    ] = Field(
+        validation_alias=AliasPath("caseHeader", "caseClassification"),
+        default=("", "", ""),
+    )
+    classification_id: int = Field(
+        validation_alias=AliasPath("caseHeader", "caseClassificationID")
+    )
+    court_id: Annotated[
+        str,
+        BeforeValidator(
+            florida_external_id_to_js_id_validator, json_schema_input_type=str
+        ),
+    ] = Field(validation_alias=AliasPath("caseHeader", "courtID"))
+    court_abbreviation: str = Field(
+        validation_alias=AliasPath("caseHeader", "courtAbbreviation"),
+        default="",
+    )
+    location: str = Field(
+        validation_alias=AliasPath("caseHeader", "location"), default=""
+    )
+    location_id: int = Field(
+        validation_alias=AliasPath("caseHeader", "locationID"), default=0
+    )
+    date_filed: Annotated[
+        date,
+        BeforeValidator(
+            datetime_str_to_date_validator, json_schema_input_type=str
+        ),
+    ] = Field(validation_alias=AliasPath("caseHeader", "filedDate"))
+    datetime_filed: datetime = Field(
+        validation_alias=AliasPath("caseHeader", "filedDate")
+    )
+    case_group_flag: bool | None = Field(
+        validation_alias=AliasPath("caseHeader", "caseGroupFlag"),
+        default=None,
+    )
+    panel_flag: bool | None = Field(
+        validation_alias=AliasPath("caseHeader", "panelFlag"), default=None
+    )
+    originating_cases: list[FloridaOriginatingCase] = Field(
+        validation_alias=AliasPath("caseHeader", "originatingCourtCases"),
+        default_factory=list,
+    )
+    transfers: list[DocketTransfer] = []
+    entries: list[FloridaDocketEntry] = []
+    parties: list[FloridaParty] = []
+    arguments: list[FloridaArgument] = []
+
+
+class FloridaCaseListParser(FloridaPaginatedResultsParser[FloridaCase]):
+    """
+    Parser for Florida case list API results.
+
+    :cvar endpoint: The API endpoint for fetching cases from a given court.
+    """
+
+    endpoint: ClassVar[str] = "/courts/cms/cases/"
+
+    @override
+    def parse_full(self, i: str) -> FloridaPaginatedResults[FloridaCase]:
+        return FloridaPaginatedResults[FloridaCase].model_validate_json(i)
+
+
+class FloridaCaseInfoParser(LegacyParser[FloridaCase]):
+    """
+    Parser for Florida case info API results.
+
+    :cvar endpoint: The API endpoint for fetching info about a specific case.
+    """
+
+    endpoint: ClassVar[str] = "/courts/{court}/cms/cases/{case}"
+
+    @staticmethod
+    def populate_transfers(case: FloridaCase) -> None:
+        """Populates the ``transfers`` field of a case inplace."""
+        case.transfers = [
+            DocketTransfer(
+                direction=TransferDirection.INBOUND,
+                reason=TransferReason.APPEAL,
+                court_id=oc.court_id.value,
+                docket_number=oc.case_number,
+            )
+            for oc in case.originating_cases
+        ]
+
+    @override
+    def _parse(self, i: str) -> FloridaCase:
+        flc = FloridaCase.model_validate_json(i)
+        # I would prefer to use Pydantic's computed_field decorator for this,
+        # but type checkers complain if I do so alas.
+        self.populate_transfers(flc)
+        return flc

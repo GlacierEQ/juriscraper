@@ -5,8 +5,15 @@ Author: mlissner
 History:
     2014-07-31, mlissner: commited first version
     2024-12-31, grossir: Implemented new site
+    2025-08-26, lmanzur: Updated added extract_from_text.
 """
 
+import re
+
+from typing_extensions import override
+
+from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -18,7 +25,8 @@ class Site(OpinionSiteLinear):
         self.url = "https://media.cadc.uscourts.gov/opinions/bydate/recent"
         self.status = "Published"
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         link_xpath = "a[contains(@href, '.pdf')]"
         for row in self.html.xpath(f"//div[div[div[div[{link_xpath}]]]]"):
             self.cases.append(
@@ -29,3 +37,38 @@ class Site(OpinionSiteLinear):
                     "date": row.xpath(".//span/text()")[-1],
                 }
             )
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract lower court from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+
+        pattern = re.compile(
+            r"""
+            (?:
+               (?:On\s+)?Appeals?\s+from\s+the\s+
+              | (?:On\s+)?Petitions?\s+for\s+Review\s+of\s+(?:a\s+)?(?:Final\s+)?Action\s+of\s+the\s+
+            )
+            (?P<lower_court>[^.]+?)
+            (?=\s*(?:\.|\(|Nos?\.|USC|D.C.|\n\s*\n))
+            """,
+            re.X | re.IGNORECASE,
+        )
+
+        lower_court = ""
+        if match := pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+
+        if lower_court:
+            return {
+                "Docket": {
+                    "appeal_from_str": titlecase(lower_court),
+                }
+            }
+
+        return {}

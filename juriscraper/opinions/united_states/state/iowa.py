@@ -1,10 +1,13 @@
 # Scraper for Iowa Supreme Court
 # CourtID: iowa
 # Court Short Name: iowa
+import re
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.string_utils import convert_date_string
-from juriscraper.OpinionSite import OpinionSite
+from juriscraper.OpinionSite import ExtractedMetaData, OpinionSite
 
 
 class Site(OpinionSite):
@@ -17,11 +20,12 @@ class Site(OpinionSite):
             "placeholder"
         ]  # this array can't be empty
         self.url = "https://www.iowacourts.gov/iowa-courts/supreme-court/supreme-court-opinions/"
+        self.should_have_results = True
 
-    def _download(self, request_dict=None):
+    async def _download(self, request_dict=None):
         if request_dict is None:
             request_dict = {}
-        html = super()._download(request_dict)
+        html = await super()._download(request_dict)
         self.extract_cases(html)
         if self.test_mode_enabled() or self.archive:
             return html
@@ -32,10 +36,11 @@ class Site(OpinionSite):
             next_page_url = self.extract_next_page_url(html)
             if next_page_url:
                 logger.info(f"Scraping next page: {next_page_url}")
-                html = self._get_html_tree_by_url(next_page_url)
+                html = await self._get_html_tree_by_url(next_page_url)
                 self.extract_cases(html)
             else:
                 proceed = False
+        return None
 
     def _get_case_names(self):
         return [case["name"] for case in self.cases]
@@ -52,17 +57,19 @@ class Site(OpinionSite):
     def _get_docket_numbers(self):
         return [case["docket"] for case in self.cases]
 
-    def _download_backwards(self, _):
+    async def _download_backwards(self, _):
         """Walk over all "Archive" links on Archive page,
         extract cases dictionaries, and add to self.cases
         """
         self.archive = True
         self.url = f"{self.url}opinions-archive/"
-        landing_page_html = self._download()
+        landing_page_html = await self._download()
         path = '//div[@class="main-content-wrapper"]//a[contains(./text(), "Opinions Archive")]/@href'
         for archive_page_url in landing_page_html.xpath(path):
             logger.info(f"Back scraping archive page: {archive_page_url}")
-            archive_page_html = self._get_html_tree_by_url(archive_page_url)
+            archive_page_html = await self._get_html_tree_by_url(
+                archive_page_url
+            )
             self.extract_archive_cases(archive_page_html)
 
     def extract_cases(self, html):
@@ -123,3 +130,49 @@ class Site(OpinionSite):
         path = '//div[contains(./@class, "pagination-next-page")]//a/@href'
         elements = html.xpath(path)
         return elements[0] if elements else False
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract lower court from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+        pattern = re.compile(
+            r"""
+            (?:
+               Appeals?\s+from\s+the\s+(?:report\s+of\s+the\s+)?
+              | On\s+review\s+of\s+the\s+report\s+of\s+the\s+
+              | On\s+application\s+of\s+the\s+
+              | On\s+review\s+from\s+the\s+
+            )
+            (?P<lower_court>[^,.]+?)
+            (?:,\s*
+                (?P<lower_court_judge>[^,]+?)
+                ,\s*judge
+            )?
+            \.
+            """,
+            re.X | re.IGNORECASE,
+        )
+
+        result: ExtractedMetaData = {}
+        if match := pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+
+            result["Docket"] = {
+                "appeal_from_str": lower_court,
+            }
+
+            if match.group("lower_court_judge"):
+                lower_court_judge = re.sub(
+                    r"\s+", " ", match.group("lower_court_judge")
+                ).strip()
+
+                result["OriginatingCourtInformation"] = {
+                    "assigned_to_str": lower_court_judge
+                }
+
+        return result

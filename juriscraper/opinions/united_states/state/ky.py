@@ -13,16 +13,19 @@ History:
                 to access restrictions.
     2020-08-28: Updated to use new secondary search portal at https://appellatepublic.kycourts.net/
     2024-04-08: Updated to use new opinion search portal, by grossir
+    2025-06-31: Added extract_from_text method to get lower court info, luism
 """
 
 import re
 from datetime import date, datetime, timedelta
-from typing import Optional
 from urllib.parse import urlencode
+
+from typing_extensions import override
 
 from juriscraper.AbstractSite import logger
 from juriscraper.lib.judge_parsers import normalize_judge_string
 from juriscraper.lib.string_utils import titlecase
+from juriscraper.OpinionSite import ExtractedMetaData
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
 
 
@@ -52,7 +55,7 @@ class Site(OpinionSiteLinear):
         self.make_backscrape_iterable(kwargs)
 
     def set_url(
-        self, start: Optional[date] = None, end: Optional[date] = None
+        self, start: date | None = None, end: date | None = None
     ) -> None:
         """Sets URL with appropiate query parameters
 
@@ -79,7 +82,8 @@ class Site(OpinionSiteLinear):
         }
         self.url = f"{self.api_url}{urlencode(params)}"
 
-    def _process_html(self) -> None:
+    @override
+    async def _process_html(self) -> None:
         """Parse API JSON response into case dictionaries
 
         :return None
@@ -130,14 +134,27 @@ class Site(OpinionSiteLinear):
                 doc_json = result["detailJson"]
             else:
                 detail_url = self.docket_entry_url.format(row["docketEntryID"])
-                doc_json = self.get_json(detail_url)
+                doc_json = await self.get_json(detail_url)
+
+            if not doc_json:
+                logger.error(
+                    "ky: no document details returned for Docket %s",
+                    docket_number,
+                )
+                continue
 
             if not case_name:
                 case_name = doc_json[0]["caseHeader"].get("shortTitle")
             doc_id = doc_json[0].get("documentID")
-            doc_text = doc_json[0]["documentText"][0]
+            doc_text = (
+                doc_json[0]["documentText"][0]
+                if doc_json[0].get("documentText")
+                else ""
+            )
 
-            if "\r\nTO BE PUBLISHED \r\n" in doc_text:
+            if not doc_text:
+                status = "Unknown"
+            elif "\r\nTO BE PUBLISHED \r\n" in doc_text:
                 status = "Published"
             else:
                 status = "Unpublished"
@@ -154,18 +171,18 @@ class Site(OpinionSiteLinear):
                 }
             )
 
-    def get_json(self, url: str) -> dict:
+    async def get_json(self, url: str) -> dict:
         """Get JSON from the API
 
         :param url: url
         :return: JSON as dict
         """
         logger.debug("Getting JSON: '%s'", url)
-        self._request_url_get(url)
+        await self._request_url_get(url)
         self._post_process_response()
         return self._return_response_text_object()
 
-    def _download_backwards(self, dates: tuple[date]) -> None:
+    async def _download_backwards(self, dates: tuple[date, date]) -> None:
         """Set date range from backscraping args and scrape
 
         :param dates: (start_date, end_date) tuple
@@ -173,5 +190,50 @@ class Site(OpinionSiteLinear):
         """
         logger.info("Backscraping for range %s %s", *dates)
         self.set_url(*dates)
-        self.html = self._download()
-        self._process_html()
+        self.html = await self._download()
+        await self._process_html()
+
+    @override
+    def extract_from_text(self, scraped_text: str) -> ExtractedMetaData:
+        """Extract lower court from the scraped text.
+
+        :param scraped_text: The text to extract from.
+        :return: A dictionary with the metadata.
+        """
+        pattern = re.compile(
+            r"""
+            ON\s+(?:APPEAL|REVIEW)\s+FROM\s+(?P<lower_court>[^\n.]+)
+            .*?
+            (?:HONORABLE\s+(?P<lower_court_judge>[\w\s.\-]+),\s*JUDGE.*?)?
+            NOS?\.\s*(?P<lower_court_number>[\w\-]+)
+            """,
+            re.I | re.S | re.X,
+        )
+
+        result: ExtractedMetaData = {}
+        if match := pattern.search(scraped_text):
+            lower_court = re.sub(
+                r"\s+", " ", match.group("lower_court")
+            ).strip()
+
+            # Prepend 'Kentucky' if lower_court is 'Court of Appeals'
+            if lower_court.lower() == "court of appeals":
+                lower_court = "Kentucky Court of Appeals"
+
+            result["Docket"] = {
+                "appeal_from_str": titlecase(lower_court),
+            }
+
+            lower_court_judge = match.group("lower_court_judge")
+            lower_court_number = match.group("lower_court_number")
+
+            if lower_court_judge:
+                result.setdefault("OriginatingCourtInformation", {})[
+                    "assigned_to_str"
+                ] = titlecase(lower_court_judge.strip())
+            if lower_court_number:
+                result.setdefault("OriginatingCourtInformation", {})[
+                    "docket_number"
+                ] = lower_court_number.strip()
+
+        return result

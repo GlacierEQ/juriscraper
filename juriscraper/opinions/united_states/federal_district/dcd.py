@@ -11,6 +11,7 @@ import re
 from datetime import date, datetime
 
 from lxml import html
+from typing_extensions import override
 
 from juriscraper.lib.string_utils import titlecase
 from juriscraper.OpinionSiteLinear import OpinionSiteLinear
@@ -27,7 +28,8 @@ class Site(OpinionSiteLinear):
         self.status = "Published"
         self.make_backscrape_iterable(kwargs)
 
-    def _process_html(self):
+    @override
+    def _process_html(self) -> None:
         """
         Some rows have mutliple documents and hence urls for each case.
         We will "pad" every other metadata field to match the urls
@@ -69,20 +71,19 @@ class Site(OpinionSiteLinear):
         """
         # In 2012 (and perhaps elsewhere) they have a few weird urls.
         match = self.docket_document_number_regex.search(url)
-        doc_number = match.group(6) if match else url
+        return match.group(6) if match else url
 
-        return doc_number
-
-    def _download_backwards(self, year: int) -> None:
+    async def _download_backwards(self, year: int) -> None:
         """Build URL with year input and scrape
 
         :param year: year to scrape
         :return None
         """
         self.url = f"https://ecf.dcd.uscourts.gov/cgi-bin/Opinions.pl?{year}"
-        self.html = self._download()
+        self.html = await self._download()
         self._process_html()
 
+    @override
     def make_backscrape_iterable(self, kwargs: dict) -> None:
         """Checks if backscrape start and end arguments have been passed
         by caller, and parses them accordingly
